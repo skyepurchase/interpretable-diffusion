@@ -1,0 +1,16 @@
+[project]
+name = "ssm-diffusion"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "flax>=0.12.1",
+    "jax>=0.8.0",
+    "scikit-learn>=1.8.0",
+]
+
+[dependency-groups]
+dev = [
+    "neovim>=0.3.1",
+]
