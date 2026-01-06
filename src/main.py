@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
 from evaluate import accuracy
-from models.vae import VAE
+from models import VAE
 from train import train
 
 
