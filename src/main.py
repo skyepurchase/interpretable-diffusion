@@ -1,22 +1,17 @@
-import jax
 from jax.random import PRNGKey, split
 from sklearn.datasets import load_digits
 from sklearn.model_selection import train_test_split
 
-import optax
 from flax import nnx
 import jax.numpy as jnp
 
 import matplotlib.pyplot as plt
 
-from evaluate import accuracy
-from models import VAE
-from train import train
+from models import VAE, train_vae
 
 
 def preprocess_images(images):
     expanded = jnp.expand_dims(jnp.asarray(images), -1)
-    #upscaled = jax.image.resize(expanded, shape=(expanded.shape[0], 28, 28, 1),method="bilinear")
 
     return expanded / jnp.max(expanded)
 
@@ -43,23 +38,24 @@ if __name__=='__main__':
     model = VAE(latent_dim, rngs=nnx.Rngs(0))
 
     key, subkey = split(key)
-    enc_key, dec_key = split(subkey, num=2)
-    latents = model.encode(images_train[:10]).sample(seed=enc_key)
+    train_vae(model, images_train, key=subkey)
 
-    _, ax = plt.subplots(1, 1, figsize=(5,5))
-    ax.imshow(model.decode(latents)[0].sample(seed=dec_key))
+    key, subkey = split(key)
+    enc_key, dec_key = split(subkey, num=2)
+    latents = model.encode_and_sample(
+        images_train[:10], key=enc_key)
+    imgs = model.decode(latents)
+
+    _, ax = plt.subplots(1, 1, figsize=(12,5))
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    imgs = imgs.reshape(2,5,8,8,1)
+    grid = imgs.transpose(0,2,1,3,4).reshape(2*8,5*8,1)
+    ax.imshow(grid, cmap="gray")
     plt.savefig("test.png", format="png")
 
-    # optimizer = nnx.ModelAndOptimizer(
-    #     model, optax.sgd(learning_rate=0.05)
-    # )
-    # train(
-    #     model,
-    #     optimizer,
-    #     images_train,
-    #     label_train,
-    #     images_test,
-    #     label_test
-    # )
-    # 
-    # accuracy(model, images_test, label_test)
+    imgs = images_train[:10].reshape(2,5,8,8,1)
+    grid = imgs.transpose(0,2,1,3,4).reshape(2*8,5*8,1)
+    ax.imshow(grid, cmap="gray")
+    plt.savefig("ref.png", format="png")

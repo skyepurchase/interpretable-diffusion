@@ -23,19 +23,19 @@ class Encoder(nnx.Module):
         self.latent_dim = latent_dim
 
         self.encode = nnx.Sequential(
-            nnx.Conv(1, 16, (3,3), padding='VALID', rngs=rngs),
-            nnx.BatchNorm(16, rngs=rngs),
+            nnx.Conv(1, 4, (3,3), padding='VALID', rngs=rngs),
+            nnx.BatchNorm(4, rngs=rngs),
             nnx.relu,
             Partial(nnx.max_pool, window_shape=(3,3)),
-            nnx.Conv(16, 32, (3,3), padding='VALID', rngs=rngs),
-            nnx.BatchNorm(32, rngs=rngs),
+            nnx.Conv(4, 8, (3,3), padding='VALID', rngs=rngs),
+            nnx.BatchNorm(8, rngs=rngs),
             nnx.relu,
             lambda x: jnp.reshape(x, (x.shape[0], -1)),
-            nnx.Linear(32 * 2 * 2, 32, rngs=rngs),
-            nnx.Linear(32, 2*latent_dim, rngs=rngs)
+            nnx.Linear(8 * 2 * 2, 8, rngs=rngs),
+            nnx.Linear(8, 2*latent_dim, rngs=rngs)
         )
 
-    def __call__(self, x) -> distrax.DistributionLike:
+    def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         assert len(x.shape) == 4, f"Expected B,H,W,C but only received {len(x.shape)}"
 
         mu, log_sigma = jnp.split(self.encode(x), 2, axis=1)
@@ -44,14 +44,14 @@ class Encoder(nnx.Module):
         assert mu.shape == (x.shape[0], self.latent_dim)
         assert mu.shape == sigma.shape
 
-        return distrax.MultivariateNormalDiag(mu, sigma)
+        return mu, sigma
 
 
 class Decoder(nnx.Module):
     def __init__(
         self,
         latent_dim: int,
-        channel_start: int = 6,
+        channel_start: int = 2,
         length_start: int = 4,
         *,
         rngs: nnx.Rngs
@@ -66,20 +66,19 @@ class Decoder(nnx.Module):
             rngs=rngs
         )
         self.generate = nnx.Sequential(
-            nnx.Conv(channel_start, 32, (3,3), padding='SAME', rngs=rngs),
-            nnx.BatchNorm(32, rngs=rngs),
+            nnx.Conv(channel_start, 8, (3,3), padding='SAME', rngs=rngs),
+            nnx.BatchNorm(8, rngs=rngs),
             nnx.relu,
-            Partial(upsample, shape=(7, 7, 32), method="bilinear"),
-            nnx.Conv(32, 16, (3,3), padding='VALID', rngs=rngs),
-            nnx.BatchNorm(16, rngs=rngs),
+            Partial(upsample, shape=(7, 7, 8), method="bilinear"),
+            nnx.Conv(8, 4, (3,3), padding='VALID', rngs=rngs),
+            nnx.BatchNorm(4, rngs=rngs),
             nnx.relu,
-            Partial(upsample, shape=(10, 10, 16), method="bilinear"),
-            nnx.Conv(16, 1, (3,3), padding='VALID', rngs=rngs),
-            nnx.BatchNorm(1, rngs=rngs),
-            nnx.sigmoid
+            Partial(upsample, shape=(10, 10, 4), method="bilinear"),
+            nnx.Conv(4, 1, (3,3), padding='VALID', rngs=rngs),
+            nnx.BatchNorm(1, rngs=rngs)
         )
 
-    def __call__(self, z) -> distrax.DistributionLike:
+    def __call__(self, z: jax.Array) -> jax.Array:
         assert len(z.shape) == 2
         assert z.shape[1] == self.latent_dim
 
@@ -89,12 +88,12 @@ class Decoder(nnx.Module):
             self.length_start,
             self.c_start
         )
-        mu = self.generate(features)
+        logits = self.generate(features)
 
-        assert mu.shape[1] == mu.shape[2], "Expected image to be a square"
-        assert mu.shape[1] == 8, f"Expected side length to be 8 received {mu.shape[1]}"
+        assert logits.shape[1] == logits.shape[2], "Expected image to be a square"
+        assert logits.shape[1] == 8, f"Expected side length to be 8 received {logits.shape[1]}"
 
-        return distrax.Bernoulli(mu)
+        return nnx.sigmoid(logits)
 
 
 class VAE(nnx.Module):
@@ -104,15 +103,24 @@ class VAE(nnx.Module):
         *,
         rngs: nnx.Rngs
     ) -> None:
-        self.encoder = Encoder(latent_dim=latent_dim, rngs=rngs)
-        self.decoder = Decoder(latent_dim=latent_dim, channel_start=6, rngs=rngs)
+        self.latent_dim = latent_dim
 
-    def __call__(self, x, rngs):
-        sample_z = self.encode(x).sample(seed=rngs)
-        return self.decode(sample_z).sample(seed=rngs)
+        self.encode = Encoder(latent_dim=latent_dim, rngs=rngs)
+        self.decode = Decoder(latent_dim=latent_dim, channel_start=6, rngs=rngs)
 
-    def encode(self, x):
-        return self.encoder(x)
+    def __call__(
+        self,
+        x: jax.Array,
+        key: jax.Array
+    ) -> jax.Array:
+        sample_z = self.encode_and_sample(x, key)
+        return self.decode(sample_z)
 
-    def decode(self, z):
-        return self.decoder(z)
+    def encode_and_sample(
+        self,
+        x: jax.Array,
+        key: jax.Array
+    ) -> jax.Array:
+        mu_z, sigma_z = self.encode(x)
+        Z = jax.random.normal(key=key, shape=mu_z.shape)
+        return mu_z + Z * sigma_z
