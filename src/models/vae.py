@@ -1,6 +1,4 @@
-import distrax
 import jax
-from jax.lax import cond
 from jax.tree_util import Partial
 import jax.numpy as jnp
 from flax import nnx
