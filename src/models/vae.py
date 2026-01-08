@@ -7,8 +7,25 @@ from flax.typing import Shape
 from jax.image import ResizeMethod
 
 
-def upsample(x, shape: Shape, method: str | ResizeMethod):
-    return jax.image.resize(x, shape=(x.shape[0], *shape), method=method)
+class Upsample:
+    def __init__(
+        self,
+        shape: Shape,
+        method: str | ResizeMethod = "bilinear"
+    ) -> None:
+        self.shape = shape
+        self.method = method
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        assert len(x.shape) == 4, f"Expected image to have shape B,W,H,C received {len(x.shape)} dims"
+
+        batch = x.shape[0]
+        channels = x.shape[-1]
+        return jax.image.resize(
+            x,
+            shape=(batch, *self.shape, channels),
+            method=self.method
+        )
 
 
 class Encoder(nnx.Module):
@@ -21,16 +38,16 @@ class Encoder(nnx.Module):
         self.latent_dim = latent_dim
 
         self.encode = nnx.Sequential(
-            nnx.Conv(1, 4, (3,3), padding='VALID', rngs=rngs),
-            nnx.BatchNorm(4, rngs=rngs),
+            nnx.Conv(1, 16, (3,3), strides=(3,3), padding='VALID', rngs=rngs),
+            nnx.BatchNorm(16, rngs=rngs),
             nnx.relu,
-            Partial(nnx.max_pool, window_shape=(3,3)),
-            nnx.Conv(4, 8, (3,3), padding='VALID', rngs=rngs),
-            nnx.BatchNorm(8, rngs=rngs),
+            Partial(nnx.max_pool, window_shape=(2,2)),
+            nnx.Conv(16, 32, (3,3), strides=(3,3), padding='VALID', rngs=rngs),
+            nnx.BatchNorm(32, rngs=rngs),
             nnx.relu,
             lambda x: jnp.reshape(x, (x.shape[0], -1)),
-            nnx.Linear(8 * 2 * 2, 8, rngs=rngs),
-            nnx.Linear(8, 2*latent_dim, rngs=rngs)
+            nnx.Linear(32 * 2 * 2, 32, rngs=rngs),
+            nnx.Linear(32, 2*latent_dim, rngs=rngs)
         )
 
     def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -49,14 +66,18 @@ class Decoder(nnx.Module):
     def __init__(
         self,
         latent_dim: int,
-        channel_start: int = 2,
-        length_start: int = 4,
+        channel_start: int = 6,
+        length_start: int = 7,
+        target_length: int = 28,
+        eps: float = 1e-6,
         *,
         rngs: nnx.Rngs
     ) -> None:
         self.latent_dim = latent_dim
         self.c_start = channel_start
         self.length_start = length_start
+        self.l_target = target_length
+        self.eps = eps
 
         self.expand = nnx.Linear(
             self.latent_dim,
@@ -64,15 +85,15 @@ class Decoder(nnx.Module):
             rngs=rngs
         )
         self.generate = nnx.Sequential(
-            nnx.Conv(channel_start, 8, (3,3), padding='SAME', rngs=rngs),
-            nnx.BatchNorm(8, rngs=rngs),
+            nnx.Conv(channel_start, 32, (3,3), padding='SAME', rngs=rngs),
+            nnx.BatchNorm(32, rngs=rngs),
             nnx.relu,
-            Partial(upsample, shape=(7, 7, 8), method="bilinear"),
-            nnx.Conv(8, 4, (3,3), padding='VALID', rngs=rngs),
-            nnx.BatchNorm(4, rngs=rngs),
+            Upsample((15,15), method="bilinear"),
+            nnx.Conv(32, 16, (3,3), padding='VALID', rngs=rngs),
+            nnx.BatchNorm(16, rngs=rngs),
             nnx.relu,
-            Partial(upsample, shape=(10, 10, 4), method="bilinear"),
-            nnx.Conv(4, 1, (3,3), padding='VALID', rngs=rngs),
+            Upsample((30,30), method="bilinear"),
+            nnx.Conv(16, 1, (3,3), padding='VALID', rngs=rngs),
             nnx.BatchNorm(1, rngs=rngs)
         )
 
@@ -89,22 +110,35 @@ class Decoder(nnx.Module):
         logits = self.generate(features)
 
         assert logits.shape[1] == logits.shape[2], "Expected image to be a square"
-        assert logits.shape[1] == 8, f"Expected side length to be 8 received {logits.shape[1]}"
+        assert logits.shape[1] == self.l_target, f"Expected side length to be {self.l_target} received {logits.shape[1]}"
 
-        return nnx.sigmoid(logits)
+        return jnp.clip(
+            nnx.sigmoid(logits), self.eps, 1-self.eps)
 
 
 class VAE(nnx.Module):
     def __init__(
         self,
         latent_dim: int=2,
+        channel_start: int = 6,
+        length_start: int = 7,
+        target_length: int = 28,
+        eps: float = 1e-6,
         *,
         rngs: nnx.Rngs
     ) -> None:
         self.latent_dim = latent_dim
 
-        self.encode = Encoder(latent_dim=latent_dim, rngs=rngs)
-        self.decode = Decoder(latent_dim=latent_dim, channel_start=6, rngs=rngs)
+        self.encode = Encoder(
+            latent_dim=latent_dim, rngs=rngs)
+        self.decode = Decoder(
+            latent_dim=latent_dim,
+            channel_start=channel_start,
+            length_start=length_start,
+            target_length=target_length,
+            eps=eps,
+            rngs=rngs
+        )
 
     def __call__(
         self,
