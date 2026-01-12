@@ -7,6 +7,8 @@ from torchvision.datasets import MNIST
 import numpy as np
 from numpy.typing import NDArray
 
+from utils.config.datasets import DatasetConfig
+
 
 def np_collate(batch: list) -> NDArray:
     """
@@ -26,28 +28,16 @@ def jnp_cast(img) -> NDArray:
 
 
 def get_MNIST(
-    data_dir: str, batch_size: int = 128
+    cfg: DatasetConfig
 ) -> tuple[DataLoader, DataLoader]:
-    train = MNIST(
-        data_dir,
-        download=True,
-        transform=jnp_cast
-    )
-    test = MNIST(
-        data_dir,
-        download=True,
-        transform=jnp_cast,
-        train=False
-    )
+    train = MNIST(cfg.dir, download=True, transform=jnp_cast)
+    test = MNIST(cfg.dir, download=True, transform=jnp_cast, train=False)
+
     train_loader = DataLoader(
-        train,
-        batch_size=batch_size,
-        collate_fn=np_collate
+        train, batch_size=cfg.batch_size, collate_fn=np_collate
     )
     test_loader = DataLoader(
-        train,
-        batch_size=len(test),
-        collate_fn=np_collate
+        train, batch_size=len(test), collate_fn=np_collate
     )
 
     return train_loader, test_loader

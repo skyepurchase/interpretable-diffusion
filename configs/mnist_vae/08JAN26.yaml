@@ -1,3 +1,8 @@
+dataset: mnist
+dataset_config:
+  dir: './data/MNIST'
+  download: true
+  batch_size: 128
 model: vae
 model_config:
   encoder:
@@ -22,7 +27,7 @@ model_config:
         padding: valid
         act: relu
     - type: flatten
-      config:
+      config: {}
     - type: linear
       config:
         in_features: 128 # ideally calculate
@@ -65,3 +70,4 @@ model_config:
   initial_shape: 7
   output_shape: 28
   eps: 1e-6
+epochs: 15

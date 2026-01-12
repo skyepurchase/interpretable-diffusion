@@ -7,7 +7,7 @@ from flax import nnx
 import matplotlib.pyplot as plt
 
 from models import VAE, make_model, train_vae
-from datasets import get_MNIST
+from datasets import get_MNIST, get_dataset
 
 
 if __name__=='__main__':
@@ -32,14 +32,16 @@ if __name__=='__main__':
     key = PRNGKey(0)
     rngs = nnx.Rngs(0)
 
-    train_loader, test_loader = get_MNIST('./data/MNIST')
+    train_loader, test_loader = get_dataset(
+        config.get('dataset'), config.get('dataset_config')
+    )
 
     model = make_model(
-        config['model'], config['model_config'], rngs=rngs
+        config.get('model'), config.get('model_config'), rngs=rngs
     )
 
     key, subkey = split(key)
-    train_vae(model, train_loader, key=subkey, epochs=15)
+    train_vae(model, train_loader, key=subkey, epochs=config.get('epochs'))
 
     key, enc_key, dec_key = split(subkey, num=3)
     latents = model.encode_and_sample(
