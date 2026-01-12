@@ -52,9 +52,9 @@ def train_step(
     optimizer: nnx.Optimizer,
     seed: jax.Array
 ):
-    loss_gradient = nnx.grad(ELBO_loss)
-    grads = loss_gradient(model, data, seed)
+    loss, grads = nnx.value_and_grad(ELBO_loss)(model, data, seed)
     optimizer.update(model, grads)
+    return loss
 
 
 def train_vae(
@@ -72,10 +72,9 @@ def train_vae(
     for i in range(cfg.epochs+1):
         running_loss = 0
         for imgs, _ in dataloader:
-            key, train_key, loss_key = split(key, num=3)
-            train_step(model, imgs, optimizer, seed=train_key)
+            key, train_key = split(key, num=2)
+            loss = train_step(model, imgs, optimizer, seed=train_key)
 
-            loss = ELBO_loss(model, imgs, key=loss_key)
             running_loss += (
                     loss * imgs.shape[0] /
                     (len(dataloader) * imgs.shape[0])
