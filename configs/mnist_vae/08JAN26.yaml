@@ -1,6 +1,6 @@
 dataset: mnist
 dataset_config:
-  dir: './data/MNIST'
+  dir: ./data/MNIST
   download: true
   batch_size: 128
 model: vae
@@ -70,4 +70,6 @@ model_config:
   initial_shape: 7
   output_shape: 28
   eps: 1e-6
-epochs: 15
+trainer_config:
+  lr: 1e-3
+  epochs: 15

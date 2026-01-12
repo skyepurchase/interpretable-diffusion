@@ -1,15 +1,27 @@
+from flax import nnx
 from flax.nnx import Rngs
+import jax
+from torch.utils.data import DataLoader
 
-from .vae import VAE, VAEConfig
+from utils.config.models import VAEConfig
+from utils.config.trainer import TrainerConfig
+
+from .vae import VAE
 from .train_vae import train_vae
+
+from typing import Callable
 
 
 MODELS = {
-    'vae': (VAE, VAEConfig)
+    'vae': (VAE, VAEConfig),
+}
+
+TRAINERS = {
+    'vae': train_vae
 }
 
 
-def make_model(name: str, cfg, rngs: Rngs):
+def make_model(name: str, cfg, rngs: Rngs) -> nnx.Module:
     if name in MODELS:
         model, config = MODELS[name]
         return model(config(**cfg), rngs)
@@ -17,7 +29,16 @@ def make_model(name: str, cfg, rngs: Rngs):
     raise ValueError(f"Model {name} not found")
 
 
+def get_trainer(name: str) -> Callable[
+    [nnx.Module, DataLoader, TrainerConfig, jax.Array], None
+]:
+    if name in TRAINERS:
+        return TRAINERS[name]
+
+    raise ValueError(f"Trainer for {name} not found")
+
+
 __all__ = [
     'make_model',
-    'train_vae',
+    'get_trainer',
 ]

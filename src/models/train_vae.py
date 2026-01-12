@@ -7,6 +7,8 @@ from flax import nnx
 
 from torch.utils.data import DataLoader
 
+from utils.config.trainer import TrainerConfig
+
 from .vae import VAE
 
 
@@ -56,18 +58,18 @@ def train_step(
 
 
 def train_vae(
-    model: VAE,
+    model: nnx.Module,
     dataloader: DataLoader,
-    epochs: int = 5,
-    lr: float=1e-3,
-    *,
+    cfg: TrainerConfig,
     key: jax.Array
 ):
+    assert isinstance(model, VAE)
+
     optimizer = nnx.Optimizer(
-        model, optax.adam(lr), wrt=nnx.Param
+        model, optax.adam(cfg.lr), wrt=nnx.Param
     )
 
-    for i in range(epochs+1):
+    for i in range(cfg.epochs+1):
         running_loss = 0
         for imgs, _ in dataloader:
             key, train_key, loss_key = split(key, num=3)

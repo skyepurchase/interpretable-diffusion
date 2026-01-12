@@ -1,4 +1,4 @@
-import yaml, traceback
+import yaml
 from argparse import ArgumentParser
 
 from jax.random import PRNGKey, split
@@ -6,8 +6,9 @@ from flax import nnx
 
 import matplotlib.pyplot as plt
 
-from models import VAE, make_model, train_vae
-from datasets import get_MNIST, get_dataset
+from models import make_model, get_trainer
+from datasets import get_dataset
+from utils.config.trainer import TrainerConfig
 
 
 if __name__=='__main__':
@@ -40,8 +41,13 @@ if __name__=='__main__':
         config.get('model'), config.get('model_config'), rngs=rngs
     )
 
+    trainer = get_trainer(config.get('model'))
     key, subkey = split(key)
-    train_vae(model, train_loader, key=subkey, epochs=config.get('epochs'))
+    trainer(
+        model, train_loader,
+        TrainerConfig(**config.get('trainer_config')),
+        subkey
+    )
 
     key, enc_key, dec_key = split(subkey, num=3)
     latents = model.encode_and_sample(
