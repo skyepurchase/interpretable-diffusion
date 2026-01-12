@@ -1,6 +1,5 @@
 import optax
 import jax
-import jax.numpy as jnp
 from jax.random import split
 from jax.scipy.stats import norm, bernoulli
 

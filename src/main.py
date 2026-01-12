@@ -1,19 +1,42 @@
+import yaml, traceback
+from argparse import ArgumentParser
+
 from jax.random import PRNGKey, split
 from flax import nnx
 
 import matplotlib.pyplot as plt
 
-from models import VAE, train_vae
+from models import VAE, make_model, train_vae
 from datasets import get_MNIST
 
 
 if __name__=='__main__':
+    parser = ArgumentParser()
+    parser.add_argument(
+        '-c', '--config',
+        help="path to config file",
+        required=True
+    )
+    args = parser.parse_args()
+
+    try:
+        with open(args.config, "r") as config_file:
+            config = yaml.safe_load(config_file)
+    except FileNotFoundError:
+        print(f"Provided config file, {args.config} not found")
+        quit()
+    except yaml.YAMLError:
+        print("Error processing the config file. Verify the YAML formatting")
+        quit()
+
     key = PRNGKey(0)
+    rngs = nnx.Rngs(0)
 
     train_loader, test_loader = get_MNIST('./data/MNIST')
 
-    latent_dim = 2
-    model = VAE(latent_dim, rngs=nnx.Rngs(0))
+    model = make_model(
+        config['model'], config['model_config'], rngs=rngs
+    )
 
     key, subkey = split(key)
     train_vae(model, train_loader, key=subkey, epochs=15)
