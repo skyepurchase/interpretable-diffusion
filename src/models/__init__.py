@@ -1,6 +1,7 @@
+import jax
 from flax import nnx
 from flax.nnx import Rngs
-import jax
+import orbax.checkpoint as ocp
 from torch.utils.data import DataLoader
 
 from utils.config.models import VAEConfig
@@ -29,6 +30,16 @@ def make_model(name: str, cfg, rngs: Rngs) -> nnx.Module:
     raise ValueError(f"Model {name} not found")
 
 
+def load_model(name: str, cfg, checkpoint, rngs: Rngs) -> nnx.Module:
+    model = make_model(name, cfg, rngs)
+    graph, state = nnx.split(model)
+
+    checkpointer = ocp.StandardCheckpointer()
+    checkpoint_state = checkpointer.restore(checkpoint, state)
+
+    return nnx.merge(graph, checkpoint_state)
+
+
 def get_trainer(name: str) -> Callable[
     [nnx.Module, DataLoader, TrainerConfig, jax.Array], None
 ]:
@@ -40,5 +51,6 @@ def get_trainer(name: str) -> Callable[
 
 __all__ = [
     'make_model',
+    'load_model',
     'get_trainer',
 ]

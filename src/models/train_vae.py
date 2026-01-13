@@ -69,7 +69,7 @@ def train_vae(
         model, optax.adam(cfg.lr), wrt=nnx.Param
     )
 
-    for i in range(cfg.epochs+1):
+    for i in range(cfg.epochs):
         running_loss = 0
         for imgs, _ in dataloader:
             key, train_key = split(key, num=2)
@@ -80,4 +80,4 @@ def train_vae(
                     (len(dataloader) * imgs.shape[0])
             )
 
-        print(f"Epoch {i}: loss={running_loss:.2f}")
+        print(f"Epoch {i+1}: loss={running_loss:.2f}")

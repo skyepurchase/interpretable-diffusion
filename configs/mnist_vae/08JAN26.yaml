@@ -73,3 +73,4 @@ model_config:
 trainer_config:
   lr: 1e-3
   epochs: 15
+checkpoint_dir: checkpoints/mnist_vae
