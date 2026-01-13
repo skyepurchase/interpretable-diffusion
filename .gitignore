@@ -1,2 +1,10 @@
 # Python
 __pycache__/
+
+# Images
+*.png
+*.jpg
+
+# Large data folders
+data/
+checkpoints/
