@@ -27,17 +27,11 @@ def jnp_cast(img) -> NDArray:
     return np.expand_dims(data, -1)
 
 
-def get_MNIST(
-    cfg: DatasetConfig
-) -> tuple[DataLoader, DataLoader]:
+def get_MNIST(cfg: DatasetConfig) -> tuple[DataLoader, DataLoader]:
     train = MNIST(cfg.dir, download=True, transform=jnp_cast)
     test = MNIST(cfg.dir, download=True, transform=jnp_cast, train=False)
 
-    train_loader = DataLoader(
-        train, batch_size=cfg.batch_size, collate_fn=np_collate
-    )
-    test_loader = DataLoader(
-        train, batch_size=len(test), collate_fn=np_collate
-    )
+    train_loader = DataLoader(train, batch_size=cfg.batch_size, collate_fn=np_collate)
+    test_loader = DataLoader(train, batch_size=len(test), collate_fn=np_collate)
 
     return train_loader, test_loader

@@ -14,12 +14,10 @@ from typing import Callable
 
 
 MODELS = {
-    'vae': (VAE, VAEConfig),
+    "vae": (VAE, VAEConfig),
 }
 
-TRAINERS = {
-    'vae': train_vae
-}
+TRAINERS = {"vae": train_vae}
 
 
 def make_model(name: str, cfg, rngs: Rngs) -> nnx.Module:
@@ -40,9 +38,9 @@ def load_model(name: str, cfg, checkpoint, rngs: Rngs) -> nnx.Module:
     return nnx.merge(graph, checkpoint_state)
 
 
-def get_trainer(name: str) -> Callable[
-    [nnx.Module, DataLoader, TrainerConfig, jax.Array], None
-]:
+def get_trainer(
+    name: str,
+) -> Callable[[nnx.Module, DataLoader, TrainerConfig, jax.Array], None]:
     if name in TRAINERS:
         return TRAINERS[name]
 
@@ -50,7 +48,7 @@ def get_trainer(name: str) -> Callable[
 
 
 __all__ = [
-    'make_model',
-    'load_model',
-    'get_trainer',
+    "make_model",
+    "load_model",
+    "get_trainer",
 ]
