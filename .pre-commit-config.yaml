@@ -10,3 +10,10 @@ repos:
     hooks:
       - id: ruff-check
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: preserve-config
+        name: Protect config files from changes
+        entry: scripts/check-config.sh
+        language: script
+        stages: [pre-commit]
