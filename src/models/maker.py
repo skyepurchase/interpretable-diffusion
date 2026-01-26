@@ -1,20 +1,19 @@
+from typing import Callable
+
 import jax
+import orbax.checkpoint as ocp
 from flax import nnx
 from flax.nnx import Rngs
-import orbax.checkpoint as ocp
 from torch.utils.data import DataLoader
 
 from utils.config.models import DDIMConfig, TUNetConfig, VAEConfig
 from utils.config.trainer import TrainerConfig
 
-from .vae import VAE
-from .train_vae import train_vae
 from .ddim import DDIM
 from .train_ddim import train_ddim
+from .train_vae import train_vae
 from .unet import TUNet
-
-from typing import Callable
-
+from .vae import VAE
 
 MODELS = {"vae": (VAE, VAEConfig), "temporal-unet": (TUNet, TUNetConfig)}
 

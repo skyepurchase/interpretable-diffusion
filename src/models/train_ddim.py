@@ -1,10 +1,9 @@
 import jax
-import jax.random
-from jax.random import split
 import jax.numpy as jnp
-
+import jax.random
 import optax
 from flax import nnx
+from jax.random import split
 from torch.utils.data import DataLoader
 
 from models.ddim import DDIM

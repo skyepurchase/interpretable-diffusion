@@ -1,14 +1,12 @@
-import optax
 import jax
-from jax.random import split
-from jax.scipy.stats import norm, bernoulli
-
+import optax
 from flax import nnx
-
+from jax.random import split
+from jax.scipy.stats import bernoulli, norm
 from torch.utils.data import DataLoader
 
-from utils.config.trainer import TrainerConfig
 from models.vae import VAE
+from utils.config.trainer import TrainerConfig
 
 
 def ELBO_loss(model: VAE, x: jax.Array, key: jax.Array) -> jax.Array:

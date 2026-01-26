@@ -1,13 +1,10 @@
-from jax.tree_util import tree_map
 import jax.numpy as jnp
-
-from torch.utils.data import DataLoader, default_collate
-from torchvision.datasets import MNIST
-
 import numpy as np
-
+from jax.tree_util import tree_map
 from numpy.typing import NDArray
 from PIL.Image import Image
+from torch.utils.data import DataLoader, default_collate
+from torchvision.datasets import MNIST
 
 from utils.config.datasets import DatasetConfig
 

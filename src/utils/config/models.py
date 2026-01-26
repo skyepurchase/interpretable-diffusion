@@ -3,7 +3,6 @@ from pydantic.dataclasses import dataclass
 
 from .modules import ModuleConfig
 
-
 ModelArch = list[ModuleConfig]
 
 

@@ -1,17 +1,15 @@
 import os
-from datetime import datetime
 from argparse import ArgumentParser
-
-from flax import nnx
-from jax.random import PRNGKey, split
+from datetime import datetime
 
 import matplotlib.pyplot as plt
+from flax import nnx
+from jax.random import PRNGKey, split
 
 from datasets import get_dataset
 from models import load_model
 from models.vae import VAE
 from utils.config import load_config
-
 
 NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 

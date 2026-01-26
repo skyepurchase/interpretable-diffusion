@@ -2,15 +2,14 @@ import os
 from argparse import ArgumentParser
 from datetime import datetime
 
-from jax.random import PRNGKey, split
-from flax import nnx
 import orbax.checkpoint as ocp
+from flax import nnx
+from jax.random import PRNGKey, split
 
-from models import make_model, get_trainer
 from datasets import get_dataset
+from models import get_trainer, make_model
 from utils.config import load_config
 from utils.config.trainer import TrainerConfig
-
 
 NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 

@@ -1,6 +1,7 @@
 from flax import nnx
 
 from utils.config.modules import LinearConfig
+
 from .acts import ACTS
 
 

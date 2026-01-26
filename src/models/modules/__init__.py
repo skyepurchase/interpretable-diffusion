@@ -1,16 +1,11 @@
 from flax import nnx
 
-from utils.config.modules import (
-    ConvConfig,
-    LinearConfig,
-    MaxPoolConfig,
-    UpSampleConfig,
-)
-from .upsample import make_upsample
-from .max_pool import make_max_pool
+from utils.config.modules import ConvConfig, LinearConfig, MaxPoolConfig, UpSampleConfig
+
 from .conv import make_conv
 from .linear import make_linear
-
+from .max_pool import make_max_pool
+from .upsample import make_upsample
 
 MODULES = {
     "conv": (make_conv, ConvConfig),
