@@ -1,5 +1,5 @@
 [project]
-name = "ssm-diffusion"
+name = "interpretable-diffusion"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -17,6 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "isort>=7.0.0",
     "neovim>=0.3.1",
     "ruff>=0.14.14",
 ]
