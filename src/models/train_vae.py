@@ -8,8 +8,7 @@ from flax import nnx
 from torch.utils.data import DataLoader
 
 from utils.config.trainer import TrainerConfig
-
-from .vae import VAE
+from models.vae import VAE
 
 
 def ELBO_loss(model: VAE, x: jax.Array, key: jax.Array) -> jax.Array:

@@ -1,9 +1,7 @@
-from dataclasses import dataclass
-from pydantic import validate_arguments
+from pydantic.dataclasses import dataclass
 from typing import Optional
 
 
-@validate_arguments
 @dataclass
 class ConvConfig:
     in_features: int
@@ -21,13 +19,12 @@ class LinearConfig:
     act: str = "relu"
 
 
-@validate_arguments
 @dataclass
 class MaxPoolConfig:
     window_shape: tuple[int, int]
+    strides: Optional[tuple[int, int]] = None
 
 
-@validate_arguments
 @dataclass
 class UpSampleConfig:
     shape: tuple[int, int]
