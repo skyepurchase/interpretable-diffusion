@@ -30,7 +30,7 @@ class TUNetConfig:
 
 @dataclass
 class DenoiserConfig:
-    type: str
+    model: str
     config: dict
 
 
