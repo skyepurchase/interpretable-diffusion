@@ -10,7 +10,7 @@ def get_beta_schedule(
     schedule: str, beta_start: float, beta_end: float, timesteps: int
 ) -> jax.Array:
     if schedule == "linear":
-        betas = jnp.linspace(beta_start, beta_end, timesteps, dtype=jnp.float64)
+        betas = jnp.linspace(beta_start, beta_end, timesteps, dtype=jnp.float32)
     else:
         raise NotImplementedError(f"No implementation for schedule {schedule}")
 

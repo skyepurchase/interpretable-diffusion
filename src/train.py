@@ -6,7 +6,7 @@ from jax.random import PRNGKey, split
 from flax import nnx
 import orbax.checkpoint as ocp
 
-from models import load_model, make_model, get_trainer
+from models import make_model, get_trainer
 from datasets import get_dataset
 from utils.config import load_config
 from utils.config.trainer import TrainerConfig
@@ -49,10 +49,3 @@ if __name__ == "__main__":
     )
 
     checkpointer.wait_until_finished()
-
-    loaded_model = load_model(
-        config.get("model"),
-        config.get("model_config"),
-        os.path.join(os.getcwd(), config.get("checkpoint_dir"), "260113_105710"),
-        rngs=nnx.Rngs(1),
-    )

@@ -1,0 +1,32 @@
+dataset: mnist
+dataset_config:
+  dir: ./data/MNIST
+  download: true
+  batch_size: 128
+
+model: ddim
+model_config:
+  denoiser:
+    model: temporal-unet
+    config:
+      in_features: 1
+      out_features: 1
+      time_features: 8
+      feature_multiples:
+        - 8
+      act: relu
+      resize_method: bilinear
+
+  time_embedding: 4
+  time_features: 8
+  beta_schedule: linear
+  beta_start: 0.0001
+  beta_end: 0.02
+  num_timesteps: 100
+  act: relu
+
+trainer_config:
+  lr: 1e-3
+  epochs: 15
+
+checkpoint_dir: checkpoints/mnist_ddim
