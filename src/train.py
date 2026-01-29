@@ -1,13 +1,12 @@
-import os
 from argparse import ArgumentParser
 from datetime import datetime
 
-import orbax.checkpoint as ocp
 from flax import nnx
 from jax.random import PRNGKey, split
 
 from datasets import get_dataset
-from models import get_trainer, load_model, make_model
+from models import get_trainer, make_model
+from models.utils import save_model
 from utils.config import load_config
 from utils.config.trainer import TrainerConfig
 
@@ -29,23 +28,7 @@ if __name__ == "__main__":
 
     train = get_trainer(config.model)
     key, subkey = split(key)
+
     train(model, train_loader, TrainerConfig(**config.trainer_config), subkey)
 
-    if not os.path.isdir(config.checkpoint_dir):
-        os.makedirs(config.checkpoint_dir)
-
-    _, state = nnx.split(model)
-
-    # Async used to verify the full save occurs
-    checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
-    checkpointer.save(os.path.join(os.getcwd(), config.checkpoint_dir, NOW), state)
-    checkpointer.save(os.path.join(os.getcwd(), config.checkpoint_dir, "latest"), state)
-
-    checkpointer.wait_until_finished()
-
-    loaded_model = load_model(
-        config.model,
-        config.model_config,
-        os.path.join(os.getcwd(), config.checkpoint_dir, "260113_105710"),
-        rngs=nnx.Rngs(1),
-    )
+    save_model(model, config.checkpoint_dir)
