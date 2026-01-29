@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from pydantic import validate_arguments
 from typing import Optional
+
+from pydantic import validate_arguments
 
 
 @validate_arguments

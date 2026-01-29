@@ -2,7 +2,6 @@ from utils.config.datasets import DatasetConfig
 
 from .mnist import get_MNIST
 
-
 DATASETS = {"mnist": get_MNIST}
 
 

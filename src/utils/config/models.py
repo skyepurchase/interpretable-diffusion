@@ -1,8 +1,8 @@
 from dataclasses import dataclass
+
 from pydantic import validate_arguments
 
 from .modules import ModuleConfig
-
 
 ModelArch = list[ModuleConfig]
 
