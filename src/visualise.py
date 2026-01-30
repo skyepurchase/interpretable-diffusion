@@ -9,12 +9,14 @@ from jax.random import PRNGKey
 from datasets import get_dataset
 from models import load_model
 from utils.config import ExperimentConfig, load_config
-from visualisers.vae import reconstruct
+from visualisers.ddim import generate
 
 NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 
 
-VISUALISER = {"vae", reconstruct}
+VISUALISER = {
+    "vae": generate,
+}
 
 
 def visualise(
@@ -59,7 +61,7 @@ def visualise(
 
     print("Generating samples...\n")
     grid = (
-        reconstruct(model, images, key)
+        VISUALISER[config.model](model, images, key=key)
         .reshape(n_rows, n_cols, 28, 28, 1)
         .transpose(0, 2, 1, 3, 4)
         .reshape(n_rows * 28, n_cols * 28, 1)
