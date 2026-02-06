@@ -45,7 +45,7 @@ def visualise(
         The number of columns of samples
     """
     print("Setting up visualisation...\n")
-    rngs = nnx.Rngs(0)
+    rngs = nnx.Rngs(27032002)
     key = PRNGKey(0)
 
     model = load_model(
