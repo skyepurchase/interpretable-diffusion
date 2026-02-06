@@ -10,13 +10,12 @@ from datasets import get_dataset
 from models import load_model
 from utils.config import ExperimentConfig, load_config
 from visualisers.ddim import generate
+from visualisers.vae import reconstruct
 
 NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 
 
-VISUALISER = {
-    "vae": generate,
-}
+VISUALISER = {"vae": reconstruct, "ddim": generate}
 
 
 def visualise(

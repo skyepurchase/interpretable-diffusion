@@ -1,10 +1,8 @@
-from dataclasses import dataclass
-
-from pydantic import validate_arguments
+from pydantic.dataclasses import dataclass
 
 
-@validate_arguments
 @dataclass
 class TrainerConfig:
     lr: float = 1e-3
     epochs: int = 15
+    snapshot_freq: int = 1
