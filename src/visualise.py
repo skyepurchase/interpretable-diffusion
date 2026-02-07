@@ -97,7 +97,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--checkpoint", help="checkpoint file in YYMMDD_HHMMSS format", default="latest"
     )
+    parser.add_argument("--n_rows", type=int, help="the number of rows", default=5)
+    parser.add_argument("--n_cols", type=int, help="the number of rows", default=20)
+
     args = parser.parse_args()
     config = load_config(args.config)
 
-    visualise(config, args.output, args.format, args.checkpoint)
+    visualise(
+        config, args.output, args.format, args.checkpoint, args.n_rows, args.n_cols
+    )
