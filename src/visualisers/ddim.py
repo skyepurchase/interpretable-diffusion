@@ -1,9 +1,49 @@
+from typing import Callable
+
 import jax
 import jax.numpy as jnp
 from flax import nnx
-from tqdm import tqdm
 
 from models.ddim import DDIM
+
+Carry = tuple[nnx.Module, jax.Array, jax.Array]
+
+
+def make_step(
+    n_samples: int, shape: tuple[int, ...]
+) -> Callable[[Carry, jax.Array], tuple[Carry, jax.Array]]:
+    """
+    Create the generation step keeping the number of samples and shape constant.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of image samples
+    shape : (int, int, int)
+        The shape of the images
+
+    Returns
+    -------
+    step
+        Function to be used in jax scan
+    """
+
+    def step(carry: Carry, value: jax.Array) -> tuple[Carry, jax.Array]:
+        model, prev, key = carry
+        alpha_raw, step = jnp.split(value, 2, axis=0)
+
+        key, noise_key = jax.random.split(key, 2)
+        noise = jax.random.normal(noise_key, shape=(n_samples, *shape))
+
+        alpha = alpha_raw.reshape(-1, 1, 1, 1)
+        x = prev * jnp.sqrt(alpha) + noise * jnp.sqrt(1 - alpha)
+
+        eps = model(x, step * jnp.ones(n_samples))
+        curr = (x - eps * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
+
+        return (model, curr, key), curr
+
+    return step
 
 
 def generate(model: nnx.Module, array_like: jax.Array, key: jax.Array) -> jax.Array:
@@ -31,18 +71,13 @@ def generate(model: nnx.Module, array_like: jax.Array, key: jax.Array) -> jax.Ar
     img_shape = array_like.shape[1:]
     n_samples = array_like.shape[0]
 
-    steps = jnp.linspace(999, 0, 50, dtype=int)
-    alphas = (1 - model.betas).cumprod(axis=0)
-    pred_x = array_like.copy()
+    steps = jnp.linspace(999, 0, 100, dtype=int)
+    alphas = (1 - model.betas).cumprod(axis=0)[steps]
+    values = jnp.concatenate([alphas[:, None], steps[:, None]], axis=1)
 
-    for step in tqdm(steps, desc="Sampling"):
-        key, noise_key = jax.random.split(key, 2)
-        random_start = jax.random.normal(noise_key, shape=(n_samples, *img_shape))
+    init = (model, array_like.copy(), key)
 
-        alpha = alphas[step].reshape(-1, 1, 1, 1)
-        x = pred_x * jnp.sqrt(alpha) + random_start * jnp.sqrt(1 - alpha)
+    gen_step = make_step(n_samples, img_shape)
+    _, images = jax.lax.scan(gen_step, init, values)
 
-        eps = model(x, step * jnp.ones(n_samples))
-        pred_x = (x - eps * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
-
-    return jnp.clip(pred_x, 0, 1)
+    return jnp.clip(images[-1], 0, 1)
