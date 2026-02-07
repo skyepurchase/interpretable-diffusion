@@ -15,8 +15,6 @@ MODULES = {
     "flatten": (lambda _, rngs: lambda x: x.reshape(x.shape[0], -1), lambda *_: None),
 }
 
-ACTS = {"swish": nnx.swish}
-
 
 def make_module(type: str, cfg: dict, out_features: int, *, rngs: nnx.Rngs):
     if type in MODULES:

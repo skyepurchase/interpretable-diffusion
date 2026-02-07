@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from diffuse.neural_network.nn import CondUNet2D
 from flax import nnx
 
-from models.modules import ACTS
+from models.modules.acts import ACTS
 from utils.config.models import DDIMConfig
 
 
