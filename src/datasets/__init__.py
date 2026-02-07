@@ -2,10 +2,7 @@ from utils.config.datasets import DatasetConfig
 
 from .mnist import get_MNIST
 
-
-DATASETS = {
-    'mnist': get_MNIST
-}
+DATASETS = {"mnist": get_MNIST}
 
 
 def get_dataset(name: str, cfg):
@@ -16,5 +13,5 @@ def get_dataset(name: str, cfg):
 
 
 __all__ = [
-    'get_dataset',
+    "get_dataset",
 ]

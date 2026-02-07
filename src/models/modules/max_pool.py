@@ -7,5 +7,4 @@ def make_max_pool(
     cfg: MaxPoolConfig,
     **_,
 ):
-    return lambda x: nnx.max_pool(
-        x, window_shape=cfg.window_shape)
+    return lambda x: nnx.max_pool(x, window_shape=cfg.window_shape)
