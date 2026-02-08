@@ -1,63 +1,66 @@
 import jax
 import jax.numpy as jnp
+from diffuse.neural_network.nn import CondUNet2D
 from flax import nnx
 
 from models.modules.acts import ACTS
 from utils.config.models import DDIMConfig
 
 
-def get_beta_schedule(
-    schedule: str, beta_start: float, beta_end: float, timesteps: int
+def compute_betas(
+    schedule: str, beta_start: float, beta_end: float, num_timesteps: int
 ) -> jax.Array:
+    """
+    Produce beta sequence according to provided schedule
+
+    Parameters
+    ----------
+    schedule : str
+        The schedule to create betas
+    beta_start : float
+        Inclusive beta start value
+    beta_end : float
+        Inclusive beta end value
+    num_timesteps : int
+        The number of timesteps used in training
+    """
     if schedule == "linear":
-        betas = jnp.linspace(beta_start, beta_end, timesteps, dtype=jnp.float32)
-    else:
-        raise NotImplementedError(f"No implementation for schedule {schedule}")
+        return jnp.linspace(beta_start, beta_end, num_timesteps)
 
-    assert betas.shape == (timesteps,)
-    return betas
-
-
-def get_timestep_embedding(timesteps: jax.Array, embedding_dim: int) -> jax.Array:
-    """
-    This matches the implementation in denoising diffusion implicit models (https://github.com/ermongroup/ddim/blob/main/models/diffusion.py), which in turn matches denoising diffusion probabilistic models.
-    """
-    half_dim = embedding_dim // 2
-    emb = jnp.log(10000) / (half_dim - 1)
-    emb = jnp.exp(jnp.arange(half_dim, dtype=jnp.float32) * -emb)
-    emb = timesteps[:, None] * emb[None, :]
-    emb = jnp.concatenate([jnp.sin(emb), jnp.cos(emb)], axis=1)
-
-    if embedding_dim % 2 == 1:
-        emb = jnp.pad(emb, ((0, 0), (0, 1), (0, 0), (0, 0)))
-
-    return emb
+    raise NotImplementedError(f"{schedule} schedule not implemented.")
 
 
 class DDIM(nnx.Module):
-    def __init__(self, cfg: DDIMConfig, denoiser: nnx.Module, rngs: nnx.Rngs) -> None:
-        self.in_time_features = cfg.time_embedding
-        self.betas = get_beta_schedule(
-            cfg.beta_schedule, cfg.beta_start, cfg.beta_end, cfg.num_timesteps
-        )
+    """
+    A wrapper for jcopo/diffuse CondUNet2D
+
+    Parameters
+    ----------
+    cfg : DDIMConfig
+        The configuration for the CondUNet2D
+    rngs : nnx.Rngs
+        A PRNG key
+    """
+
+    def __init__(self, cfg: DDIMConfig, rngs: nnx.Rngs) -> None:
         self.num_timesteps = cfg.num_timesteps
-
-        self.embed_time = nnx.Sequential(
-            nnx.Linear(
-                in_features=cfg.time_embedding,
-                out_features=cfg.time_features,
-                rngs=rngs,
-            ),
-            ACTS[cfg.act],
-            nnx.Linear(
-                in_features=cfg.time_features, out_features=cfg.time_features, rngs=rngs
-            ),
+        self.betas = compute_betas(
+            cfg.beta_schedule, cfg.beta_start, cfg.beta_end, self.num_timesteps
         )
 
-        self.denoiser = denoiser
+        self.denoiser = CondUNet2D(
+            in_channels=cfg.in_features,
+            ch=cfg.base_features,
+            ch_mult=cfg.feature_multiples,
+            num_res_blocks=cfg.num_blocks,
+            attention_resolutions=cfg.attention_resolutions,
+            activation=ACTS[cfg.act],
+            dropout=cfg.dropout,
+            dropout_rate=cfg.dropout_rate,
+            num_heads=cfg.attention_heads,
+            rngs=rngs,
+        )
 
     def __call__(self, x: jax.Array, t: jax.Array) -> jax.Array:
-        time_embedding = get_timestep_embedding(t, self.in_time_features)
-        time_embedding = self.embed_time(time_embedding)
-
-        return self.denoiser(x, time_embedding)
+        """Wrapper to return the output itself"""
+        return self.denoiser(x, t).output

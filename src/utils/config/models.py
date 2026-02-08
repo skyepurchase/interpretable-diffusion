@@ -1,4 +1,3 @@
-from jax.image import ResizeMethod
 from pydantic.dataclasses import dataclass
 
 from .modules import ModuleConfig
@@ -18,28 +17,17 @@ class VAEConfig:
 
 
 @dataclass
-class TUNetConfig:
-    in_features: int
-    out_features: int
-    time_features: int
-    feature_multiples: list[int]
-    act: str
-    resize_method: str | ResizeMethod = "bilinear"
-
-
-@dataclass
-class DenoiserConfig:
-    model: str
-    config: dict
-
-
-@dataclass
 class DDIMConfig:
-    denoiser: DenoiserConfig
-    time_embedding: int
-    time_features: int
+    in_features: int
+    base_features: int
+    feature_multiples: tuple[int, ...]
+    num_blocks: int
+    attention_resolutions: tuple[int, ...]
+    attention_heads: int
+    act: str
+    dropout: bool
+    dropout_rate: float
+    num_timesteps: int
     beta_schedule: str
     beta_start: float
     beta_end: float
-    num_timesteps: int
-    act: str

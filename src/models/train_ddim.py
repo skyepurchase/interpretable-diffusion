@@ -5,6 +5,7 @@ import optax
 from flax import nnx
 from jax.random import split
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from models.ddim import DDIM
 from utils.config.trainer import TrainerConfig
@@ -53,13 +54,14 @@ def train_ddim(
 
     optimizer = nnx.Optimizer(model, optax.adam(cfg.lr), wrt=nnx.Param)
 
-    for i in range(cfg.epochs):
+    pbar = tqdm(range(cfg.epochs), desc="Training")
+    for _ in pbar:
         running_loss = 0
-        for imgs, _ in dataloader:
+
+        for imgs, _ in tqdm(dataloader, desc="Iterating images", leave=False):
             key, train_key = split(key, num=2)
             loss = train_step(model, imgs, optimizer, key=train_key)
 
             running_loss += loss
 
-        if i % cfg.snapshot_freq == 0 or i == 1:
-            print(f"Epoch {i + 1}: loss={running_loss:.2f}")
+        pbar.set_description(f"Training, loss={running_loss:.2f}")

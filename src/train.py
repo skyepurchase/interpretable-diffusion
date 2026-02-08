@@ -1,13 +1,12 @@
-import os
 from argparse import ArgumentParser
 from datetime import datetime
 
-import orbax.checkpoint as ocp
 from flax import nnx
 from jax.random import PRNGKey, split
 
 from datasets import get_dataset
 from models import get_trainer, make_model
+from models.utils import save_model
 from utils.config import load_config
 from utils.config.trainer import TrainerConfig
 
@@ -23,28 +22,13 @@ if __name__ == "__main__":
     key = PRNGKey(0)
     rngs = nnx.Rngs(0)
 
-    train_loader, test_loader = get_dataset(
-        config.get("dataset"), config.get("dataset_config")
-    )
+    train_loader, test_loader = get_dataset(config.dataset, config.dataset_config)
 
-    model = make_model(config.get("model"), config.get("model_config"), rngs=rngs)
+    model = make_model(config.model, config.model_config, rngs=rngs)
 
-    train = get_trainer(config.get("model"))
+    train = get_trainer(config.model)
     key, subkey = split(key)
-    train(model, train_loader, TrainerConfig(**config.get("trainer_config")), subkey)
 
-    if not os.path.isdir(config.get("checkpoint_dir")):
-        os.makedirs(config.get("checkpoint_dir"))
+    train(model, train_loader, TrainerConfig(**config.trainer_config), subkey)
 
-    _, state = nnx.split(model)
-
-    # Async used to verify the full save occurs
-    checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
-    checkpointer.save(
-        os.path.join(os.getcwd(), config.get("checkpoint_dir"), NOW), state
-    )
-    checkpointer.save(
-        os.path.join(os.getcwd(), config.get("checkpoint_dir"), "latest"), state
-    )
-
-    checkpointer.wait_until_finished()
+    save_model(model, config.checkpoint_dir)
