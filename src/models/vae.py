@@ -96,6 +96,21 @@ class VAE(nnx.Module):
         return self.decode(sample_z)
 
     def encode_and_sample(self, x: jax.Array, key: jax.Array) -> jax.Array:
+        """
+        Encode a given image and sample a latent.
+
+        Parameters
+        ----------
+        x : Array
+            The input image
+        key : Array
+            PRNG key
+
+        Returns
+        -------
+        latent : Array
+            The sampled latent
+        """
         mu_z, sigma_z = self.encode(x)
         Z = jax.random.normal(key=key, shape=mu_z.shape)
         return mu_z + Z * sigma_z

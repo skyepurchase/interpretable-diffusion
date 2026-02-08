@@ -31,6 +31,7 @@ def normalise_cast(img: Image) -> NDArray:
 
 
 def get_MNIST(cfg: DatasetConfig) -> tuple[DataLoader, DataLoader]:
+    """Create MNIST train and test dataloaders"""
     train = MNIST(cfg.dir, download=True, transform=normalise_cast)
     test = MNIST(cfg.dir, download=True, transform=normalise_cast, train=False)
 

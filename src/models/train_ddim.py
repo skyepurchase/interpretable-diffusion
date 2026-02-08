@@ -28,6 +28,25 @@ def noise_estimation_loss(
 def train_step(
     model: DDIM, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
 ) -> jax.Array:
+    """
+    Carry out a single train step; randomly sample noise and time steps, calculate the model loss, perform gradient descent.
+
+    Parameters
+    ----------
+    model : DDIM
+        The model to train
+    data : Array
+        The single data sample
+    optimizer : Optimizer
+        The optimizer with the model parameters
+    key : Array
+        PRNG key
+
+    Returns
+    -------
+    loss : Array
+        The mean error for the data sample
+    """
     batch_size = data.shape[0]
     betas = model.betas
 
@@ -50,6 +69,20 @@ def train_step(
 def train_ddim(
     model: nnx.Module, dataloader: DataLoader, cfg: TrainerConfig, key: jax.Array
 ):
+    """
+    Train a DDIM model given a dataset loader.
+
+    Parameters
+    ----------
+    model : DDIM
+        The model to train
+    dataloader : DataLoader
+        A dataloader for the given dataset
+    cfg : TrainerConfig
+        Config specifying epochs and learning rate
+    key : Array
+        PRNG key
+    """
     assert isinstance(model, DDIM)
 
     optimizer = nnx.Optimizer(model, optax.adam(cfg.lr), wrt=nnx.Param)
