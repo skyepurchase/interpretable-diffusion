@@ -8,7 +8,7 @@ from jax.random import PRNGKey
 
 from datasets import get_dataset
 from models import load_model
-from utils.config import ExperimentConfig, load_config
+from utils.config import ExperimentConfig, VisualiserConfig, load_config
 from visualisers.ddim import generate
 from visualisers.vae import reconstruct
 
@@ -19,12 +19,8 @@ VISUALISER = {"vae": reconstruct, "ddim": generate}
 
 
 def visualise(
-    config: ExperimentConfig,
-    folder: os.PathLike,
-    frmt: str = "png",
-    checkpoint: str = "latest",
-    n_rows: int = 5,
-    n_cols: int = 20,
+    exp_cfg: ExperimentConfig,
+    vis_cfg: VisualiserConfig,
 ) -> None:
     """
     Visualise the generated (or reconstructed) output produced by the specified trained model.
@@ -45,25 +41,25 @@ def visualise(
         The number of columns of samples
     """
     print("Setting up visualisation...\n")
-    rngs = nnx.Rngs(27032002)
-    key = PRNGKey(0)
+    rngs = nnx.Rngs(vis_cfg.seed)
+    key = PRNGKey(vis_cfg.seed)
 
     model = load_model(
-        config.model,
-        config.model_config,
-        os.path.join(os.getcwd(), config.checkpoint_dir, checkpoint),
+        exp_cfg.model,
+        exp_cfg.model_config,
+        os.path.join(os.getcwd(), exp_cfg.checkpoint_dir, vis_cfg.checkpoint),
         rngs=rngs,
     )
 
-    _, test_loader = get_dataset(config.dataset, config.dataset_config)
-    images = next(iter(test_loader))[0][: n_rows * n_cols]
+    _, test_loader = get_dataset(exp_cfg.dataset, exp_cfg.dataset_config)
+    images = next(iter(test_loader))[0][: vis_cfg.n_rows * vis_cfg.n_cols]
 
     print("Generating samples...\n")
     grid = (
-        VISUALISER[config.model](model, images, key=key)
-        .reshape(n_rows, n_cols, 28, 28, 1)
+        VISUALISER[exp_cfg.model](model, images, key=key)
+        .reshape(vis_cfg.n_rows, vis_cfg.n_cols, 28, 28, 1)
         .transpose(0, 2, 1, 3, 4)
-        .reshape(n_rows * 28, n_cols * 28, 1)
+        .reshape(vis_cfg.n_rows * 28, vis_cfg.n_cols * 28, 1)
     )
 
     print("Creating visualisation...\n")
@@ -75,14 +71,14 @@ def visualise(
 
     ax.imshow(grid, cmap="gray")
 
-    if not os.path.isdir(folder):
-        os.makedirs(folder)
+    if not os.path.isdir(vis_cfg.folder):
+        os.makedirs(vis_cfg.folder)
 
-    perm = os.path.join(folder, f"{NOW}.{frmt}")
-    latest = os.path.join(folder, f"latest.{frmt}")
+    perm = os.path.join(vis_cfg.folder, f"{NOW}.{vis_cfg.format}")
+    latest = os.path.join(vis_cfg.folder, f"latest.{vis_cfg.format}")
 
-    plt.savefig(perm, format=frmt)
-    plt.savefig(latest, format=frmt)
+    plt.savefig(perm, format=vis_cfg.format)
+    plt.savefig(latest, format=vis_cfg.format)
 
     print(f"Visualisations saved to {perm} and {latest}.")
 
@@ -97,12 +93,23 @@ if __name__ == "__main__":
     parser.add_argument(
         "--checkpoint", help="checkpoint file in YYMMDD_HHMMSS format", default="latest"
     )
+    parser.add_argument(
+        "-s", "--seed", type=int, help="the seed for the run", default=0
+    )
     parser.add_argument("--n_rows", type=int, help="the number of rows", default=5)
     parser.add_argument("--n_cols", type=int, help="the number of rows", default=20)
 
     args = parser.parse_args()
-    config = load_config(args.config)
+    exp_cfg = load_config(args.config)
 
     visualise(
-        config, args.output, args.format, args.checkpoint, args.n_rows, args.n_cols
+        exp_cfg,
+        VisualiserConfig(
+            folder=args.output,
+            format=args.format,
+            checkpoint=args.checkpoint,
+            n_rows=args.n_rows,
+            n_cols=args.n_cols,
+            seed=args.seed,
+        ),
     )
