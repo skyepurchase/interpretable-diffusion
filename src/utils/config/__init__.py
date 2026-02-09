@@ -15,6 +15,16 @@ class ExperimentConfig:
     checkpoint_dir: str
 
 
+@dataclass
+class VisualiserConfig:
+    folder: PathLike | str
+    format: str = "png"
+    checkpoint: str = "latest"
+    n_rows: int = 5
+    n_cols: int = 20
+    seed: int = 0
+
+
 def load_config(config_file: PathLike) -> ExperimentConfig:
     """
     Load and parse the provided config file.

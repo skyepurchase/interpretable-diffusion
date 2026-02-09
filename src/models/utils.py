@@ -27,16 +27,20 @@ TRAINERS = {
     "ddim": train_ddim,
 }
 
+TrainerFn = Callable[[nnx.Module, DataLoader, TrainerConfig, jax.Array], None]
+
 
 def make_model(name: str, cfg, rngs: Rngs) -> nnx.Module:
+    """Create a model object based on the name and assorted config"""
     if name in MODELS:
         model, config = MODELS[name]
         return model(config(**cfg), rngs)
 
-    raise ValueError(f"Model {name} not found")
+    raise NotImplementedError(f"Model {name} not implemented")
 
 
 def load_model(name: str, cfg, checkpoint, rngs: Rngs) -> nnx.Module:
+    """Load model (specified by the config) from a specific checkpoint"""
     model = make_model(name, cfg, rngs)
     graph, state = nnx.split(model)
 
@@ -70,8 +74,9 @@ def save_model(model: nnx.Module, folder: str) -> None:
 
 def get_trainer(
     name: str,
-) -> Callable[[nnx.Module, DataLoader, TrainerConfig, jax.Array], None]:
+) -> TrainerFn:
+    """Return the relevant trainer function for the desired model"""
     if name in TRAINERS:
         return TRAINERS[name]
 
-    raise ValueError(f"Trainer for {name} not found")
+    raise NotImplementedError(f"Trainer for {name} not implemented")

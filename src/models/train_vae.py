@@ -5,12 +5,28 @@ from jax.random import split
 from jax.scipy.stats import bernoulli, norm
 from torch.utils.data import DataLoader
 
+from models.vae import VAE
 from utils.config.trainer import TrainerConfig
-
-from .vae import VAE
 
 
 def ELBO_loss(model: VAE, x: jax.Array, key: jax.Array) -> jax.Array:
+    """
+    Calculates the ELBO for a given model and datapoint.
+
+    Parameters
+    ----------
+    model : VAE
+        The model to evaluate
+    x : Array
+        The datapoint to evaluate on
+    key : Array
+        PRNG key
+
+    Returns
+    -------
+    loss : Array
+        The mean ELBO of the model across the datapoints
+    """
     # Encode batch
     mu_z, sigma_z = model.encode(x)
 
@@ -39,8 +55,22 @@ def ELBO_loss(model: VAE, x: jax.Array, key: jax.Array) -> jax.Array:
 
 
 @nnx.jit
-def train_step(model: VAE, data: jax.Array, optimizer: nnx.Optimizer, seed: jax.Array):
-    loss, grads = nnx.value_and_grad(ELBO_loss)(model, data, seed)
+def train_step(model: VAE, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array):
+    """
+    Carry out a single VAE train step
+
+    Parameters
+    ----------
+    model : VAE
+        The model to train
+    data : Array
+        The datapoint
+    optimizer : Optimizer
+        The optimizer for the models parameters
+    key : Array
+        PRNG key
+    """
+    loss, grads = nnx.value_and_grad(ELBO_loss)(model, data, key)
     optimizer.update(model, grads)
     return loss
 
@@ -48,6 +78,20 @@ def train_step(model: VAE, data: jax.Array, optimizer: nnx.Optimizer, seed: jax.
 def train_vae(
     model: nnx.Module, dataloader: DataLoader, cfg: TrainerConfig, key: jax.Array
 ):
+    """
+    Train a VAE model on the provided dataset.
+
+    Parameters
+    ----------
+    model : VAE
+        The model to train
+    dataloader : DataLoader
+        The dataloader for the dataset
+    cfg : TrainerConfig
+        Config specifying epochs and learning rate
+    key : Array
+        PRNG key
+    """
     assert isinstance(model, VAE)
 
     optimizer = nnx.Optimizer(model, optax.adam(cfg.lr), wrt=nnx.Param)
@@ -56,7 +100,7 @@ def train_vae(
         running_loss = 0
         for imgs, _ in dataloader:
             key, train_key = split(key, num=2)
-            loss = train_step(model, imgs, optimizer, seed=train_key)
+            loss = train_step(model, imgs, optimizer, key=train_key)
 
             running_loss += loss * imgs.shape[0] / (len(dataloader) * imgs.shape[0])
 

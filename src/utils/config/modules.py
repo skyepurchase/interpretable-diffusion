@@ -23,6 +23,7 @@ class LinearConfig:
 @dataclass
 class MaxPoolConfig:
     window_shape: tuple[int, int]
+    strides: Optional[tuple[int, int]] = None
 
 
 @dataclass

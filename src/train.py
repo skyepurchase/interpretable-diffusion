@@ -16,11 +16,12 @@ NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-c", "--config", help="path to config file", required=True)
+    parser.add_argument("-s", "--seed", type=int, help="seed for the run", default=0)
     args = parser.parse_args()
     config = load_config(args.config)
 
-    key = PRNGKey(0)
-    rngs = nnx.Rngs(0)
+    key = PRNGKey(args.seed)
+    rngs = nnx.Rngs(args.seed)
 
     train_loader, test_loader = get_dataset(config.dataset, config.dataset_config)
 

@@ -1,3 +1,5 @@
+from torch.utils.data import DataLoader
+
 from utils.config.datasets import DatasetConfig
 
 from .mnist import get_MNIST
@@ -5,11 +7,12 @@ from .mnist import get_MNIST
 DATASETS = {"mnist": get_MNIST}
 
 
-def get_dataset(name: str, cfg):
+def get_dataset(name: str, cfg: dict) -> tuple[DataLoader, DataLoader]:
+    """Create train and test dataloaders for the specified dataset and accompanying config"""
     if name in DATASETS:
         return DATASETS[name](DatasetConfig(**cfg))
 
-    raise ValueError(f"Dataset {name} not found")
+    raise NotImplementedError(f"Dataset {name} not found")
 
 
 __all__ = [

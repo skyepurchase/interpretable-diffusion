@@ -3,9 +3,11 @@ from flax import nnx
 from utils.config.modules import ConvConfig
 
 from .acts import ACTS
+from .utils import ModuleFn
 
 
-def make_conv(cfg: ConvConfig, rngs: nnx.Rngs):
+def make_conv(cfg: ConvConfig, rngs: nnx.Rngs) -> ModuleFn:
+    """Create a convolutional block with batchnorm and activation"""
     return nnx.Sequential(
         nnx.Conv(
             in_features=cfg.in_features,

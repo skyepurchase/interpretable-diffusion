@@ -26,6 +26,7 @@ def compute_betas(
     """
     if schedule == "linear":
         return jnp.linspace(beta_start, beta_end, num_timesteps)
+
     raise NotImplementedError(f"{schedule} schedule not implemented.")
 
 
