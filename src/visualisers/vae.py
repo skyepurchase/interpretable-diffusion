@@ -28,6 +28,6 @@ def reconstruct(model: nnx.Module, images: jax.Array, key: jax.Array) -> jax.Arr
     model.eval()
 
     key, enc_key = jax.random.split(key)
-    latents = model.reconstruct(images, key=enc_key)
+    latents = model.encode_and_sample(images, key=enc_key)
 
     return model.decode(latents)
