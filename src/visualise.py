@@ -27,22 +27,20 @@ def visualise(
 
     Parameters
     ----------
-    config : ExperimentConfig
+    exp_cfg : ExperimentConfig
         The config of the trained model
-    folder : PathLike
-        The output folder to store the output visualisation
-    frmt : str = png
-        The format of the output
-    checkpoint : str = latest
-        The checkpoint to use
-    n_rows : int = 5
-        The number of rows of samples
-    n_cols : int = 20
-        The number of columns of samples
+    vis_cfg : VisualiserConfig
+        The config for the visualisation
     """
     print("Setting up visualisation...\n")
     rngs = nnx.Rngs(vis_cfg.seed)
     key = PRNGKey(vis_cfg.seed)
+
+    if not os.path.isdir(vis_cfg.folder):
+        os.makedirs(vis_cfg.folder)
+
+    perm = os.path.join(vis_cfg.folder, f"{NOW}.{vis_cfg.format}")
+    latest = os.path.join(vis_cfg.folder, f"latest.{vis_cfg.format}")
 
     model = load_model(
         exp_cfg.model,
@@ -52,33 +50,47 @@ def visualise(
     )
 
     _, _, test_loader = get_dataset(exp_cfg.dataset, exp_cfg.dataset_config)
-    images = next(iter(test_loader))[0][: vis_cfg.n_rows * vis_cfg.n_cols]
+    inputs = next(iter(test_loader))[0][: vis_cfg.n_rows * vis_cfg.n_cols]
+    timesteps = next(iter(test_loader))[1][: vis_cfg.n_rows * vis_cfg.n_cols]
 
     print("Generating samples...\n")
-    grid = (
-        VISUALISER[exp_cfg.model](model, images, key=key)
-        .reshape(vis_cfg.n_rows, vis_cfg.n_cols, 28, 28, 1)
-        .transpose(0, 2, 1, 3, 4)
-        .reshape(vis_cfg.n_rows * 28, vis_cfg.n_cols * 28, 1)
-    )
+    raw = VISUALISER[exp_cfg.model](model, inputs, key=key)
 
     print("Creating visualisation...\n")
-    fig, ax = plt.subplots(1, 1, figsize=(12, 5))
-    fig.tight_layout()
+    if len(raw.shape) == 4:  # Very ugly
+        # Assume output was images
+        grid = (
+            raw.reshape(vis_cfg.n_rows, vis_cfg.n_cols, 28, 28, 1)
+            .transpose(0, 2, 1, 3, 4)
+            .reshape(vis_cfg.n_rows * 28, vis_cfg.n_cols * 28, 1)
+        )
 
-    ax.set_xticks([])
-    ax.set_yticks([])
+        fig, ax = plt.subplots(1, 1, figsize=(12, 5))
+        fig.tight_layout()
 
-    ax.imshow(grid, cmap="gray")
+        ax.set_xticks([])
+        ax.set_yticks([])
 
-    if not os.path.isdir(vis_cfg.folder):
-        os.makedirs(vis_cfg.folder)
+        ax.imshow(grid, cmap="gray")
 
-    perm = os.path.join(vis_cfg.folder, f"{NOW}.{vis_cfg.format}")
-    latest = os.path.join(vis_cfg.folder, f"latest.{vis_cfg.format}")
+        plt.savefig(perm, format=vis_cfg.format)
+        plt.savefig(latest, format=vis_cfg.format)
+    else:
+        # Assume output was time series
+        fig, axes = plt.subplots(
+            vis_cfg.n_rows, vis_cfg.n_cols, figsize=(12, 5), sharex=True, sharey=True
+        )
+        fig.tight_layout()
 
-    plt.savefig(perm, format=vis_cfg.format)
-    plt.savefig(latest, format=vis_cfg.format)
+        i = 0
+        for row in axes:
+            for ax in row:
+                ax.plot(timesteps[i], raw[i])
+                ax.plot(timesteps[i], inputs[i])
+                i += 1
+
+        plt.savefig(perm, format=vis_cfg.format)
+        plt.savefig(latest, format=vis_cfg.format)
 
     print(f"Visualisations saved to {perm} and {latest}.")
 
