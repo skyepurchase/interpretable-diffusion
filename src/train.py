@@ -23,7 +23,9 @@ if __name__ == "__main__":
     key = PRNGKey(args.seed)
     rngs = nnx.Rngs(args.seed)
 
-    train_loader, test_loader = get_dataset(config.dataset, config.dataset_config)
+    train_loader, val_loader, test_loader = get_dataset(
+        config.dataset, config.dataset_config
+    )
 
     model = make_model(config.model, config.model_config, rngs=rngs)
 

@@ -11,7 +11,7 @@ DATASETS = {
 }
 
 
-def get_dataset(name: str, cfg: dict) -> tuple[DataLoader, DataLoader]:
+def get_dataset(name: str, cfg: dict) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Create train and test dataloaders for the specified dataset and accompanying config"""
     if name in DATASETS:
         return DATASETS[name](DatasetConfig(**cfg))

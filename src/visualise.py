@@ -51,7 +51,7 @@ def visualise(
         rngs=rngs,
     )
 
-    _, test_loader = get_dataset(exp_cfg.dataset, exp_cfg.dataset_config)
+    _, _, test_loader = get_dataset(exp_cfg.dataset, exp_cfg.dataset_config)
     images = next(iter(test_loader))[0][: vis_cfg.n_rows * vis_cfg.n_cols]
 
     print("Generating samples...\n")
