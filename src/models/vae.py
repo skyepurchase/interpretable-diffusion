@@ -19,8 +19,6 @@ class Encoder(nnx.Module):
             )
 
     def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
-        assert len(x.shape) == 4, f"Expected B,H,W,C but only received {len(x.shape)}"
-
         for layer in self.layers:
             x = layer(x)
 
@@ -42,6 +40,7 @@ class Decoder(nnx.Module):
         initial_shape: int = 7,
         target_shape: int = 28,
         eps: float = 1e-6,
+        img_gen: bool = True,
         *,
         rngs: nnx.Rngs,
     ) -> None:
@@ -50,10 +49,13 @@ class Decoder(nnx.Module):
         self.length_start = initial_shape
         self.l_target = target_shape
         self.eps = eps
+        self.img_gen = img_gen
 
-        self.expand = nnx.Linear(
-            latent_dim, initial_shape * initial_shape * channel_start, rngs=rngs
-        )
+        if self.img_gen:
+            self.expand = nnx.Linear(
+                latent_dim, initial_shape * initial_shape * channel_start, rngs=rngs
+            )
+
         self.layers = nnx.List()
         for layer in arch:
             self.layers.append(
@@ -64,14 +66,18 @@ class Decoder(nnx.Module):
         assert len(z.shape) == 2
         assert z.shape[1] == self.latent_dim
 
-        x = self.expand(z).reshape(
-            z.shape[0], self.length_start, self.length_start, self.c_start
-        )
+        if self.img_gen:
+            x = self.expand(z).reshape(
+                z.shape[0], self.length_start, self.length_start, self.c_start
+            )
+        else:
+            x = z.copy()
 
         for layer in self.layers:
             x = layer(x)
 
-        assert x.shape == (z.shape[0], self.l_target, self.l_target, 1)
+        if self.img_gen:
+            assert x.shape == (z.shape[0], self.l_target, self.l_target, 1)
 
         return jnp.clip(x, self.eps, 1 - self.eps)
 
@@ -79,6 +85,7 @@ class Decoder(nnx.Module):
 class VAE(nnx.Module):
     def __init__(self, cfg: VAEConfig, rngs: nnx.Rngs) -> None:
         self.latent_dim = cfg.latent_dim
+        self.img_gen = cfg.img_gen
 
         self.encode = Encoder(arch=cfg.encoder, latent_dim=cfg.latent_dim, rngs=rngs)
         self.decode = Decoder(
@@ -88,6 +95,7 @@ class VAE(nnx.Module):
             initial_shape=cfg.initial_shape,
             target_shape=cfg.output_shape,
             eps=cfg.eps,
+            img_gen=cfg.img_gen,
             rngs=rngs,
         )
 

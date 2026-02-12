@@ -3,11 +3,15 @@ from torch.utils.data import DataLoader
 from utils.config.datasets import DatasetConfig
 
 from .mnist import get_MNIST
+from .pivae import get_pendulum
 
-DATASETS = {"mnist": get_MNIST}
+DATASETS = {
+    "mnist": get_MNIST,
+    "pendulum": get_pendulum,
+}
 
 
-def get_dataset(name: str, cfg: dict) -> tuple[DataLoader, DataLoader]:
+def get_dataset(name: str, cfg: dict) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Create train and test dataloaders for the specified dataset and accompanying config"""
     if name in DATASETS:
         return DATASETS[name](DatasetConfig(**cfg))

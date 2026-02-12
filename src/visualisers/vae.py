@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 from flax import nnx
 
 from models.vae import VAE
@@ -30,4 +31,14 @@ def reconstruct(model: nnx.Module, images: jax.Array, key: jax.Array) -> jax.Arr
     key, enc_key = jax.random.split(key)
     latents = model.encode_and_sample(images, key=enc_key)
 
-    return model.decode(latents)
+    p_x = model.decode(latents)
+
+    if model.img_gen:
+        return p_x
+    else:
+        mu_x, log_sigma_x = jnp.split(p_x, 2, axis=1)
+
+        key, dec_key = jax.random.split(key)
+        Z = jax.random.normal(key=dec_key, shape=mu_x.shape)
+
+        return mu_x + Z * jnp.exp(log_sigma_x)

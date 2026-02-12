@@ -14,6 +14,7 @@ class VAEConfig:
     initial_shape: int = 7
     output_shape: int = 28
     eps: float = 1e-6
+    img_gen: bool = True
 
 
 @dataclass
