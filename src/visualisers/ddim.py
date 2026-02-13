@@ -46,7 +46,9 @@ def make_step(
     return step
 
 
-def generate(model: nnx.Module, array_like: jax.Array, key: jax.Array) -> jax.Array:
+def generate_images(
+    model: nnx.Module, array_like: jax.Array, key: jax.Array
+) -> jax.Array:
     """
     Given a trained DDIM model and array who's shape is to be produced generate images.
 

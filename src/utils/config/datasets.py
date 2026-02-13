@@ -18,3 +18,20 @@ class PiVAEConfig:
     train_split: int = 1000
     timesteps: int = 50
     batch_size: int = 128
+
+
+def get_full_dataset_name(dataset: str, config: dict) -> str:
+    """
+    Get the full hiphenated dataset name if the dataset has subnames
+
+    Parameters
+    ----------
+    dataset: str
+        The overarching dataset name
+    config: dict
+        The dataset config that contains subnames
+    """
+    if "system" in config:
+        return "-".join([dataset, config["system"]])
+    else:
+        return dataset

@@ -9,13 +9,28 @@ from jax.random import PRNGKey
 from datasets import get_dataset
 from models import load_model
 from utils.config import ExperimentConfig, VisualiserConfig, load_config
-from visualisers.ddim import generate
-from visualisers.vae import reconstruct
+from utils.config.datasets import get_full_dataset_name
+from visualisers.ddim import generate_images
+from visualisers.vae import (
+    reconstruct_1D_series,
+    reconstruct_images,
+    reconstruct_point_series,
+)
 
 NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 
 
-VISUALISER = {"vae": reconstruct, "ddim": generate}
+VISUALISER = {
+    "mnist": {
+        "vae": reconstruct_images,
+        "ddim": generate_images,
+    },
+    "pivae-pendulum": {"vae": reconstruct_point_series},
+    "pivae-diffusion": {"vae": reconstruct_1D_series},
+}
+
+
+IMAGE_GEN = ["mnist", "pivae-diffusion"]
 
 
 def visualise(
@@ -54,15 +69,17 @@ def visualise(
     timesteps = next(iter(test_loader))[1][: vis_cfg.n_rows * vis_cfg.n_cols]
 
     print("Generating samples...\n")
-    raw = VISUALISER[exp_cfg.model](model, inputs, key=key)
+    dataset_name = get_full_dataset_name(exp_cfg.dataset, exp_cfg.dataset_config)
+    raw = VISUALISER[dataset_name][exp_cfg.model](model, inputs, key=key)
+    shape = raw.shape[1:]
 
     print("Creating visualisation...\n")
-    if len(raw.shape) == 4:  # Very ugly
-        # Assume output was images
+    if dataset_name in IMAGE_GEN:
+        assert len(shape) == 3, f"Images require (H, W, C) received {shape}."
         grid = (
-            raw.reshape(vis_cfg.n_rows, vis_cfg.n_cols, 28, 28, 1)
+            raw.reshape(vis_cfg.n_rows, vis_cfg.n_cols, *shape)
             .transpose(0, 2, 1, 3, 4)
-            .reshape(vis_cfg.n_rows * 28, vis_cfg.n_cols * 28, 1)
+            .reshape(vis_cfg.n_rows * shape[0], vis_cfg.n_cols * shape[1], shape[2])
         )
 
         fig, ax = plt.subplots(1, 1, figsize=(12, 5))
@@ -71,12 +88,16 @@ def visualise(
         ax.set_xticks([])
         ax.set_yticks([])
 
-        ax.imshow(grid, cmap="gray")
+        colour = "gray" if dataset_name == "mnist" else None
+        ax.imshow(grid, cmap=colour)
 
         plt.savefig(perm, format=vis_cfg.format)
         plt.savefig(latest, format=vis_cfg.format)
     else:
         # Assume output was time series
+        assert len(shape) == 1, (
+            f"Time series can only have 1 dimension, received {shape}"
+        )
         fig, axes = plt.subplots(
             vis_cfg.n_rows, vis_cfg.n_cols, figsize=(12, 5), sharex=True, sharey=True
         )
