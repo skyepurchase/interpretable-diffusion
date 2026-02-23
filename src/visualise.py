@@ -3,6 +3,7 @@ from argparse import ArgumentParser
 from datetime import datetime
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 from flax import nnx
 from jax.random import PRNGKey
 
@@ -31,6 +32,34 @@ VISUALISER = {
 
 
 IMAGE_GEN = ["mnist", "pivae-diffusion"]
+
+
+sns.set_theme(
+    font="DejaVu Sans",
+    rc={
+        "axes.axisbelow": False,
+        "axes.edgecolor": "lightgrey",
+        "axes.facecolor": "None",
+        "axes.grid": False,
+        "axes.labelcolor": "dimgrey",
+        "axes.spines.right": False,
+        "axes.spines.top": False,
+        "figure.facecolor": "white",
+        "lines.solid_capstyle": "round",
+        "patch.edgecolor": "w",
+        "patch.force_edgecolor": True,
+        "text.color": "dimgrey",
+        "xtick.bottom": False,
+        "xtick.color": "dimgrey",
+        "xtick.direction": "out",
+        "xtick.top": False,
+        "ytick.color": "dimgrey",
+        "ytick.direction": "out",
+        "ytick.left": False,
+        "ytick.right": False,
+    },
+)
+sns.set_palette(sns.color_palette("muted"))
 
 
 def visualise(
@@ -98,17 +127,26 @@ def visualise(
         assert len(shape) == 1, (
             f"Time series can only have 1 dimension, received {shape}"
         )
+
         fig, axes = plt.subplots(
             vis_cfg.n_rows, vis_cfg.n_cols, figsize=(12, 5), sharex=True, sharey=True
         )
         fig.tight_layout()
 
+        fig.suptitle("Sample of force-damped pendulum series")
+
         i = 0
-        for row in axes:
+        for j, row in enumerate(axes):
             for ax in row:
                 ax.plot(timesteps[i], raw[i])
-                ax.plot(timesteps[i], inputs[i])
+                if j == len(axes) - 1:
+                    ax.set_xlabel("timestep")
+                    ax.set_xticks([0, 1, 2, 2.5], ["0", "1", "2", "2.5"])
+
                 i += 1
+
+            row[0].set_ylim(bottom=-2, top=2)
+            row[0].set_ylabel("pendulum angle")
 
         plt.savefig(perm, format=vis_cfg.format)
         plt.savefig(latest, format=vis_cfg.format)

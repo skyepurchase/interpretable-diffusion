@@ -14,6 +14,7 @@ dependencies = [
     "pre-commit>=4.5.1",
     "pydantic>=2.12.5",
     "scikit-learn>=1.8.0",
+    "seaborn>=0.13.2",
     "torchvision>=0.24.1",
 ]
 
