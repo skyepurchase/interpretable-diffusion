@@ -1,20 +1,17 @@
 import os
 import shutil
 from datetime import datetime
-from typing import Callable
 
-import jax
 import orbax.checkpoint as ocp
 from flax import nnx
 from flax.nnx import Rngs
-from torch.utils.data import DataLoader
 
 from models.phys_vae import PhysVAE
-from models.train_ddim import train_ddim
-from models.train_phys_vae import train_phys_vae
-from models.train_vae import train_vae
+from models.train_ddim import train_step as ddim_step
+from models.train_phys_vae import train_step as phys_vae_step
+from models.train_vae import train_step as vae_step
 from utils.config.models import DDIMConfig, PhysVAEConfig, VAEConfig
-from utils.config.trainer import TrainerConfig
+from utils.misc import TrainStep
 
 from .ddim import DDIM
 from .vae import VAE
@@ -25,13 +22,11 @@ MODELS = {
     "phys_vae": (PhysVAE, PhysVAEConfig),
 }
 
-TRAINERS = {
-    "vae": train_vae,
-    "ddim": train_ddim,
-    "phys_vae": train_phys_vae,
+TRAIN_STEPPER = {
+    "ddim": ddim_step,
+    "vae": vae_step,
+    "phys_vae": phys_vae_step,
 }
-
-TrainerFn = Callable[[nnx.Module, DataLoader, TrainerConfig, jax.Array], None]
 
 
 def make_model(name: str, cfg, rngs: Rngs) -> nnx.Module:
@@ -79,9 +74,9 @@ def save_model(model: nnx.Module, folder: str) -> None:
 
 def get_trainer(
     name: str,
-) -> TrainerFn:
+) -> TrainStep:
     """Return the relevant trainer function for the desired model"""
-    if name in TRAINERS:
-        return TRAINERS[name]
+    if name in TRAIN_STEPPER:
+        return TRAIN_STEPPER[name]
 
     raise NotImplementedError(f"Trainer for {name} not implemented")

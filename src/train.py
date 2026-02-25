@@ -1,16 +1,57 @@
 from argparse import ArgumentParser
 from datetime import datetime
 
+import jax
+import optax
 from flax import nnx
 from jax.random import PRNGKey, split
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from datasets import get_dataset
 from models import get_trainer, make_model
 from models.utils import save_model
 from utils.config import load_config
 from utils.config.trainer import TrainerConfig
+from utils.misc import TrainStep
 
 NOW = datetime.now().strftime("%y%m%d_%H%M%S")
+
+
+def train(
+    model: nnx.Module,
+    train_step: TrainStep,
+    dataloader: DataLoader,
+    cfg: TrainerConfig,
+    key: jax.Array,
+):
+    """
+    Train a model given a dataset loader.
+
+    Parameters
+    ----------
+    model : nnx.Module
+        The model to train
+    dataloader : DataLoader
+        A dataloader for the given dataset
+    cfg : TrainerConfig
+        Config specifying epochs and learning rate
+    key : Array
+        PRNG key
+    """
+    optimizer = nnx.Optimizer(model, optax.adam(cfg.lr), wrt=nnx.Param)
+
+    pbar = tqdm(range(cfg.epochs), desc="Training")
+    for _ in pbar:
+        running_loss = 0
+
+        for imgs, _ in tqdm(dataloader, desc="Iterating images", leave=False):
+            key, train_key = split(key, num=2)
+            loss = train_step(model, imgs, optimizer, key=train_key)
+
+            running_loss += loss
+
+        pbar.set_description(f"Training, loss={running_loss:.2f}")
 
 
 if __name__ == "__main__":
@@ -29,9 +70,11 @@ if __name__ == "__main__":
 
     model = make_model(config.model, config.model_config, rngs=rngs)
 
-    train = get_trainer(config.model)
+    train_step = get_trainer(config.model)
     key, subkey = split(key)
 
-    train(model, train_loader, TrainerConfig(**config.trainer_config), subkey)
+    train(
+        model, train_step, train_loader, TrainerConfig(**config.trainer_config), subkey
+    )
 
     save_model(model, config.checkpoint_dir)

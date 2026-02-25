@@ -1,13 +1,9 @@
 import jax
 import jax.numpy as jnp
-import optax
 from flax import nnx
-from jax.random import split
 from jax.scipy.stats import bernoulli, norm
-from torch.utils.data import DataLoader
 
 from models.vae import VAE
-from utils.config.trainer import TrainerConfig
 
 
 def output_logpmf(dist: str, p_x: jax.Array, x: jax.Array) -> jax.Array:
@@ -82,7 +78,9 @@ def ELBO_loss(model: VAE, x: jax.Array, key: jax.Array) -> jax.Array:
 
 
 @nnx.jit
-def train_step(model: VAE, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array):
+def train_step(
+    model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
+) -> jax.Array:
     """
     Carry out a single VAE train step
 
@@ -98,39 +96,15 @@ def train_step(model: VAE, data: jax.Array, optimizer: nnx.Optimizer, key: jax.A
         PRNG key
     output_dist : str = bernoulli
         The distribution to use for the output
+
+    Returns
+    -------
+    loss : Array
+        The loss of the model on this datapoint
     """
+    if not isinstance(model, VAE):
+        raise TypeError(f"Expected model to be type VAE not {type(model)}")
+
     loss, grads = nnx.value_and_grad(ELBO_loss)(model, data, key)
     optimizer.update(model, grads)
     return loss
-
-
-def train_vae(
-    model: nnx.Module, dataloader: DataLoader, cfg: TrainerConfig, key: jax.Array
-):
-    """
-    Train a VAE model on the provided dataset.
-
-    Parameters
-    ----------
-    model : VAE
-        The model to train
-    dataloader : DataLoader
-        The dataloader for the dataset
-    cfg : TrainerConfig
-        Config specifying epochs and learning rate
-    key : Array
-        PRNG key
-    """
-    assert isinstance(model, VAE)
-
-    optimizer = nnx.Optimizer(model, optax.adam(cfg.lr), wrt=nnx.Param)
-
-    for i in range(cfg.epochs):
-        running_loss = 0
-        for data, _ in dataloader:
-            key, train_key = split(key, num=2)
-            loss = train_step(model, data, optimizer, key=train_key)
-
-            running_loss += loss * data.shape[0] / (len(dataloader) * data.shape[0])
-
-        print(f"Epoch {i + 1}: loss={running_loss:.2f}")

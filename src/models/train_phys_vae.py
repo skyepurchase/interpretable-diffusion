@@ -1,13 +1,8 @@
 import jax
 import jax.numpy as jnp
-import optax
 from flax import nnx
-from jax.random import split
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from models.phys_vae import PhysVAE
-from utils.config.trainer import TrainerConfig
 from utils.misc import Distribution
 
 
@@ -257,7 +252,7 @@ def loss_fn(model: PhysVAE, data: jax.Array, key: jax.Array) -> jax.Array:
 
 @nnx.jit
 def train_step(
-    model: PhysVAE, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
+    model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
 ):
     """
     Carry out a single VAE train step
@@ -275,41 +270,9 @@ def train_step(
     output_dist : str = bernoulli
         The distribution to use for the output
     """
+    if not isinstance(model, PhysVAE):
+        raise TypeError(f"Expected model to be type PhysVAE not {type(model)}")
+
     loss, grads = nnx.value_and_grad(loss_fn)(model, data, key)
     optimizer.update(model, grads)
     return loss
-
-
-def train_phys_vae(
-    model: nnx.Module, dataloader: DataLoader, cfg: TrainerConfig, key: jax.Array
-):
-    """
-    Train a physics grounded VAE model on the provided dataset.
-
-    Parameters
-    ----------
-    model : PhysVAE
-        The model to train
-    dataloader : DataLoader
-        The dataloader for the dataset
-    cfg : TrainerConfig
-        Config specifying epochs and learning rate
-    key : Array
-        PRNG key
-    """
-    assert isinstance(model, PhysVAE)
-
-    # TODO: make the optimizer a config option
-    optimizer = nnx.Optimizer(model, optax.adam(cfg.lr, eps=1e-3), wrt=nnx.Param)
-
-    pbar = tqdm(range(cfg.epochs), desc="Training")
-    for _ in pbar:
-        running_loss = 0
-
-        for data, _ in tqdm(dataloader, desc="Iterating batches", leave=False):
-            key, train_key = split(key, num=2)
-            loss = train_step(model, data, optimizer, key=train_key)
-
-            running_loss += loss
-
-        pbar.set_description(f"Training, loss={running_loss:.2f}")
