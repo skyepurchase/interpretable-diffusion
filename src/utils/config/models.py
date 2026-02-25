@@ -6,6 +6,41 @@ ModelArch = list[ModuleConfig]
 
 
 @dataclass
+class PhysFunc:
+    latent_dim: int
+    dims: list[int]
+    act: str = "elu"
+    residual: bool = False
+
+
+@dataclass
+class PhysEncoderConfig:
+    aux_funcs: list[PhysFunc]
+    unmixer: PhysFunc
+    phys_funcs: list[PhysFunc]
+
+
+@dataclass
+class PhysDecoderConfig:
+    pre_funcs: list[PhysFunc]
+    post_funcs: list[PhysFunc]
+    x_log_sigma: float = 0.01
+
+
+@dataclass
+class PhysVAEConfig:
+    encoder: PhysEncoderConfig
+    decoder: PhysDecoderConfig
+    time_dim: int
+    phys_priors: list[tuple[float, float]]
+    aux_priors: list[tuple[float, float]]
+    system: str
+    integral_level: int
+    timestep: float
+    ode_solver: str
+
+
+@dataclass
 class VAEConfig:
     encoder: ModelArch
     decoder: ModelArch

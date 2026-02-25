@@ -9,22 +9,26 @@ from flax import nnx
 from flax.nnx import Rngs
 from torch.utils.data import DataLoader
 
+from models.phys_vae import PhysVAE
 from models.train_ddim import train_ddim
-from utils.config.models import DDIMConfig, VAEConfig
+from models.train_phys_vae import train_phys_vae
+from models.train_vae import train_vae
+from utils.config.models import DDIMConfig, PhysVAEConfig, VAEConfig
 from utils.config.trainer import TrainerConfig
 
 from .ddim import DDIM
-from .train_vae import train_vae
 from .vae import VAE
 
 MODELS = {
     "vae": (VAE, VAEConfig),
     "ddim": (DDIM, DDIMConfig),
+    "phys_vae": (PhysVAE, PhysVAEConfig),
 }
 
 TRAINERS = {
     "vae": train_vae,
     "ddim": train_ddim,
+    "phys_vae": train_phys_vae,
 }
 
 TrainerFn = Callable[[nnx.Module, DataLoader, TrainerConfig, jax.Array], None]
@@ -34,6 +38,7 @@ def make_model(name: str, cfg, rngs: Rngs) -> nnx.Module:
     """Create a model object based on the name and assorted config"""
     if name in MODELS:
         model, config = MODELS[name]
+
         return model(config(**cfg), rngs)
 
     raise NotImplementedError(f"Model {name} not implemented")
