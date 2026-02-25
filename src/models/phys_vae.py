@@ -64,6 +64,19 @@ def gen_mask(total_combs: int) -> jax.Array:
 
 
 class PhysEncoder(nnx.Module):
+    """
+    Physics integrated VAE encoder network.
+
+    Parameters
+    ----------
+    cfg : PhysEncoderConfig
+        The config of the encoder
+    time_dim : int
+        The time dimension, equivalently the number of timesteps
+    rngs : nnx.Rngs
+        The model RNGs
+    """
+
     def __init__(self, cfg: PhysEncoderConfig, time_dim: int, rngs: nnx.Rngs) -> None:
         self.time_dim = time_dim
 
@@ -107,6 +120,23 @@ class PhysEncoder(nnx.Module):
     def __call__(
         self, x: jax.Array
     ) -> tuple[list[Distribution], list[Distribution], jax.Array]:
+        """
+        Encode a given datapoint into auxiliary and physical latents. Additionally, the estimated physics only signal is returned
+
+        Parameters
+        ----------
+        x : Array (B, T)
+            The batched datapoint
+
+        Returns
+        -------
+        aux_stats : list[Distribution] [(B, Z*2)]
+            The list of auxiliary latent statistics
+        aux_stats : list[Distribution] [(B, Z*2)]
+            The list of physical latent statistics
+        phys : Array (B, T)
+            The estimated physics only signal
+        """
         # Compute Auxiliary latent statistics
         aux_stats = []
         for aux_func in self.aux_funcs:
@@ -130,12 +160,37 @@ class PhysEncoder(nnx.Module):
 
 
 class PhysDecoder(nnx.Module):
+    """
+    Physics integrated VAE encoder network.
+
+    Parameters
+    ----------
+    cfg : PhysEncoderConfig
+        The config of the encoder
+    time_dim : int
+        The time dimension, equivalently the number of timesteps
+    t1 : int
+        The final timestep of the simulation
+    dt : float
+        The length of the timestep
+    integral_level : int
+        The solver substeps
+    t_span : Array (T)
+        The steps to calculate the ODE on
+    ode_solver : str
+        The ODE solver name
+    system : str
+        The underlying physical system
+    rngs : nnx.Rngs
+        The model RNGs
+    """
+
     def __init__(
         self,
         cfg: PhysDecoderConfig,
         time_dim: int,
-        integral_len: int,
-        integral_step: float,
+        t1: int,
+        dt: float,
         integral_level: int,
         t_span: jax.Array,
         ode_solver: str,
@@ -143,8 +198,8 @@ class PhysDecoder(nnx.Module):
         rngs: nnx.Rngs,
     ) -> None:
         self.time_dim = time_dim
-        self.integral_len = integral_len
-        self.integral_step = integral_step
+        self.t1 = t1
+        self.dt = dt
         self.integral_level = integral_level
         self.t_span = t_span
 
@@ -194,6 +249,25 @@ class PhysDecoder(nnx.Module):
         init_y: jax.Array,
         train=False,
     ) -> Distribution:
+        """
+        Given physical and auxiliary latents decode the full series based on the initial condition.
+
+        Parameters
+        ----------
+        phys_params : list[jax.Array] [(B, Z)]
+            The physical latents
+        latents : list[jax.Array] [(B, Z)]
+            The auxiliary latents
+        init_y : Array (B, 1)
+            The initial condition
+        train : bool = False
+            Whether the model is training or evaluating. Training returns all combinations of auxiliary functions which is unecessary for inference
+
+        Returns
+        -------
+        series : Distribution (m, B, T) or (B, T)
+            The statistics for the series with the mean and log variance stacked in the first axis
+        """
         batch_size = phys_params[0].shape[0]
         assert all([param.shape[0] == batch_size for param in phys_params]), (
             "All parameters should be the same batch size"
@@ -261,8 +335,8 @@ class PhysDecoder(nnx.Module):
             ODETerm(ODE),
             self.solver(),
             t0=0.0,
-            t1=self.integral_len,
-            dt0=self.integral_step,
+            t1=self.t1,
+            dt0=self.dt,
             y0=init_cond,
             saveat=SaveAt(ts=self.t_span),
         ).ys
@@ -270,7 +344,7 @@ class PhysDecoder(nnx.Module):
         assert y_seq is not None, "Failed to solve ODE"
 
         # trim_y_seq : (T, B*n, 2)
-        trim_y_seq = y_seq[jnp.arange(0, self.integral_len, self.integral_level), :, :]
+        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level), :, :]
 
         # x_means : (m, B, T)
         if train:
@@ -312,6 +386,17 @@ class PhysDecoder(nnx.Module):
 
 
 class PhysVAE(nnx.Module):
+    """
+    Physics integrated VAE.
+
+    Parameters
+    ----------
+    cfg : PhysVAEConfig
+        The config for the network including the encoder and decoder
+    rngs : nnx.Rngs
+        The model RNGs
+    """
+
     def __init__(self, cfg: PhysVAEConfig, rngs: nnx.Rngs) -> None:
         self.integral_level = cfg.integral_level
         self.integral_len = (cfg.time_dim - 1) * self.integral_level + 1
@@ -330,8 +415,8 @@ class PhysVAE(nnx.Module):
         self.decode = PhysDecoder(
             cfg=cfg.decoder,
             time_dim=cfg.time_dim,
-            integral_len=self.integral_len,
-            integral_step=self.integral_step,
+            t1=self.integral_len,
+            dt=self.integral_step,
             integral_level=cfg.integral_level,
             t_span=self.t_span,
             ode_solver=cfg.ode_solver,
@@ -345,6 +430,7 @@ class PhysVAE(nnx.Module):
         self.mask = self.decode.mask
 
     def __call__(self, x: jax.Array, key: jax.Array) -> Distribution:
+        """Reconstruct the input"""
         phys_stats, aux_stats, _ = self.encode(x)
         phys_latents, aux_latents = self.sample_latents(phys_stats, aux_stats, key)
         init_y = x[:, 0].reshape(-1, 1)
