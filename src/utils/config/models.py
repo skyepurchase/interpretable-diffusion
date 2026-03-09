@@ -38,6 +38,9 @@ class PhysVAEConfig:
     integral_level: int
     timestep: float
     ode_solver: str
+    alpha: float
+    beta: float
+    gamma: float
 
 
 @dataclass

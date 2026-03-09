@@ -154,9 +154,9 @@ def augmentation_loss(
     )
 
     model.train()
-    aug_loss = jnp.zeros((1,))
+    aug_loss = jnp.zeros(())
     for phys_func, aug_param in zip(model.encode.phys_funcs, aug_params):
-        aug_loss += jnp.pow(phys_func(aug_x_mean) - aug_param, 2).mean()
+        aug_loss += jnp.pow(phys_func(aug_x_mean) - aug_param, 2).sum(axis=1).mean()
 
     return aug_loss
 
@@ -192,7 +192,7 @@ def discrepancy_loss(x_stats: Distribution, mask: jax.Array) -> jax.Array:
         out_axes=0,
     )(x_stats[0][1:, :, :], x_stats[1][1:, :, :])
 
-    masked_divs = divergences.sum(axis=2) * mask
+    masked_divs = divergences.mean(axis=2) * mask
 
     # Weighted sum
     return masked_divs.sum() / mask.sum()
@@ -247,7 +247,13 @@ def loss_fn(model: PhysVAE, data: jax.Array, key: jax.Array) -> jax.Array:
     # Discrepancy loss
     disc_loss = discrepancy_loss(x_stat, model.mask)
 
-    return (rec_err + kldiv + phys_loss + data_aug_loss + disc_loss).sum()
+    return (
+        rec_err
+        + kldiv
+        + (model.alpha * disc_loss)
+        + (model.beta * phys_loss)
+        + (model.gamma * data_aug_loss)
+    )
 
 
 @nnx.jit
