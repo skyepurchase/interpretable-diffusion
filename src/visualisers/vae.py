@@ -70,7 +70,7 @@ def reconstruct_point_series(
     phys_latents, aux_latents = model.sample_latents(phys_stats, aux_stats, sub_key)
     init_y = series[:, 0].reshape(-1, 1)
 
-    return jnp.split(model.decode(phys_latents, aux_latents, init_y), 2)[0]
+    return model.decode(phys_latents, aux_latents, init_y)[0]
 
 
 def reconstruct_1D_series(model: nnx.Module, series: jax.Array, key: jax.Array):

@@ -26,8 +26,8 @@ VISUALISER = {
         "vae": reconstruct_images,
         "ddim": generate_images,
     },
-    "pivae-pendulum": {"vae": reconstruct_point_series},
-    "pivae-diffusion": {"vae": reconstruct_1D_series},
+    "pivae-pendulum": {"phys_vae": reconstruct_point_series},
+    "pivae-diffusion": {"phys_vae": reconstruct_1D_series},
 }
 
 
@@ -138,7 +138,8 @@ def visualise(
         i = 0
         for j, row in enumerate(axes):
             for ax in row:
-                ax.plot(timesteps[i], raw[i])
+                ax.plot(timesteps[i], raw[i], label="prediction")
+                ax.plot(timesteps[i], inputs[i], label="ground truth")
                 if j == len(axes) - 1:
                     ax.set_xlabel("timestep")
                     ax.set_xticks([0, 1, 2, 2.5], ["0", "1", "2", "2.5"])
@@ -147,6 +148,8 @@ def visualise(
 
             row[0].set_ylim(bottom=-2, top=2)
             row[0].set_ylabel("pendulum angle")
+
+        axes[-1][-1].legend()
 
         plt.savefig(perm, format=vis_cfg.format)
         plt.savefig(latest, format=vis_cfg.format)
