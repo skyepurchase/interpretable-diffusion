@@ -39,7 +39,7 @@ def train(
     key : Array
         PRNG key
     """
-    optimizer = nnx.Optimizer(model, optax.adam(cfg.lr), wrt=nnx.Param)
+    optimizer = nnx.Optimizer(model, optax.adam(cfg.lr, eps=cfg.eps), wrt=nnx.Param)
 
     pbar = tqdm(range(cfg.epochs), desc="Training")
     for _ in pbar:
