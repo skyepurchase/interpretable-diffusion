@@ -1,0 +1,59 @@
+dataset: pivae
+dataset_config:
+  dir: ./data/pivae
+  system: pendulum
+  batch_size: 200
+
+model: phys_vae
+model_config:
+  encoder:
+    aux_funcs:
+      - latent_dim: 1
+        dims: [128, 128, 256, 64, 32]
+        act: elu
+      - latent_dim: 2
+        dims: [128, 128, 256, 64, 32]
+        act: elu
+    unmixer:
+      latent_dim: 50
+      dims: [128, 128]
+      act: elu
+      residual: True
+    phys_funcs:
+      - latent_dim: 1
+        dims: [128, 128, 256, 64, 32]
+        act: elu
+
+  decoder:
+    pre_funcs:
+      - latent_dim: 1
+        dims: [64, 64]
+        act: elu
+    post_funcs:
+      - latent_dim: 2
+        dims: [128, 128]
+        act: elu
+    x_log_sigma: 0.01
+
+  phys_priors:
+    - [1.571, 2.002] # (0.5 * (o_min + o_max), 2 * log(0.866 * (o_max - o_min)))
+  aux_priors:
+    - [0, 0] # (mean, log variance)
+    - [0, 0]
+
+  system: pendulum
+  time_dim: 50
+  integral_level: 1.0
+  timestep: 0.05
+  ode_solver: euler
+
+  alpha: 0.01
+  beta: 0.001
+  gamma: 0.1
+
+trainer_config:
+  lr: 1e-3
+  eps: 1e-3
+  epochs: 600
+
+checkpoint_dir: checkpoints/pendulum_vae
