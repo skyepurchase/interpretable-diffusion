@@ -142,6 +142,7 @@ def augmentation_loss(
         aug_param = jax.lax.stop_gradient(
             (
                 jax.random.randint(aug_key, aug_param.shape, 0, 1000)
+                # TODO: this hardcoding is not feasible
                 * (3.14 - 0.785)
                 / 1000
             )

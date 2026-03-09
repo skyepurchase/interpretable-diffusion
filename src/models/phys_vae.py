@@ -205,6 +205,9 @@ class PhysDecoder(nnx.Module):
 
         self.x_log_sigma = cfg.x_log_sigma
 
+        num_pre_funcs = len(cfg.pre_funcs)
+        num_post_funcs = len(cfg.post_funcs)
+
         self.pre_funcs = nnx.List()
         self.post_funcs = nnx.List()
         for func_cfg in cfg.pre_funcs:
@@ -215,22 +218,22 @@ class PhysDecoder(nnx.Module):
                 func_cfg.latent_dim + 2 + 1, func_cfg.dims, 1, func_cfg.act, rngs=rngs
             )
             self.pre_funcs.append(func)
-        self.pre_combs = 2 ** len(self.pre_funcs)
-        self.pre_selections = gen_selections(len(self.pre_funcs))
+        self.pre_combs = 2**num_pre_funcs
+        self.pre_selections = gen_selections(num_pre_funcs)
 
-        phy_latent_dim = 1
         for func_cfg in cfg.post_funcs:
             func = make_mlp(
-                func_cfg.latent_dim + phy_latent_dim,
+                func_cfg.latent_dim + self.time_dim,
                 func_cfg.dims,
-                self.time_dim,
+                self.time_dim - 1,  # Do not overwrite init condition
                 func_cfg.act,
                 rngs=rngs,
             )
             self.post_funcs.append(func)
-            phy_latent_dim = self.time_dim
-        self.post_combs = 2 ** len(self.post_funcs)
-        self.post_selections = gen_selections(len(self.post_funcs))
+        self.post_combs = 2**num_post_funcs
+        self.post_selections = gen_selections(num_pre_funcs + num_post_funcs)[
+            num_pre_funcs:
+        ]
 
         self.physics_model = PHYS_MODELS.get(system, None)
         if self.physics_model is None:
@@ -301,9 +304,28 @@ class PhysDecoder(nnx.Module):
             for z_aux, pre_func, selections in zip(
                 latents[: len(self.pre_funcs)], self.pre_funcs, self.pre_selections
             ):
-                # y : (B, 2), apply : (1,)
-                def apply_func(y, apply):
-                    return apply * jnp.concatenate(
+                if train:
+                    # y : (B, 2), apply : (1,)
+                    def apply_func(y, apply):
+                        return apply * jnp.concatenate(
+                            [
+                                jnp.zeros((batch_size, 1)),
+                                pre_func(
+                                    jnp.concatenate(
+                                        [z_aux, y, jnp.ones_like(y)[:, 0, None] * t],
+                                        axis=1,
+                                    )
+                                ),
+                            ],
+                            axis=1,
+                        )
+
+                    # ys_dot_aux : (n, B, 2)
+                    ys_dot_aux += jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
+                        ys, selections
+                    )
+                else:
+                    ys_dot_aux += jnp.concatenate(
                         [
                             jnp.zeros((batch_size, 1)),
                             pre_func(
@@ -314,11 +336,6 @@ class PhysDecoder(nnx.Module):
                         ],
                         axis=1,
                     )
-
-                # ys_dot_aux : (n, B, 2)
-                ys_dot_aux += jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
-                    ys, selections
-                )
 
             # ys_dot : (B*n, 2)
             return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, 2))
@@ -356,31 +373,36 @@ class PhysDecoder(nnx.Module):
         else:
             # x_mean : (B, T)
             x_mean = trim_y_seq[:, :, 0].T
-            x_means = jnp.reshape(x_mean, (1, -1, self.time_dim))
+            x_means = jnp.reshape(x_mean, (-1, self.time_dim))
 
         for z_aux, post_func, selections in zip(
-            latents[len(self.pre_funcs) : len(self.post_funcs)],
+            latents[len(self.pre_funcs) : len(self.post_funcs) + 1],
             self.post_funcs,
             self.post_selections,
         ):
-            # x_mean : (B, T), apply : (1,)
-            def apply_func(x_mean, apply):
-                return (1 - apply) * x_mean + apply * jnp.concatenate(
+            if train:
+                # x_mean : (B, T), apply : (1,)
+                def apply_func(x_mean, apply):
+                    return (1 - apply) * x_mean + apply * jnp.concatenate(
+                        [
+                            jnp.zeros((batch_size, 1)),
+                            post_func(jnp.concatenate([z_aux, x_mean], axis=1)),
+                        ],
+                        axis=1,
+                    )
+
+                # x_means : (m, B, T)
+                x_means += jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
+                    x_means, selections
+                )
+            else:
+                x_means += jnp.concatenate(
                     [
                         jnp.zeros((batch_size, 1)),
-                        post_func(jnp.concatenate([z_aux, x_mean])),
-                    ]
+                        post_func(jnp.concatenate([z_aux, x_means], axis=1)),
+                    ],
+                    axis=1,
                 )
-
-            # x_means : (m, B, T)
-            x_means = jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
-                x_means, selections
-            )
-
-        if not train:
-            assert x_means.shape[0] == 1
-            # x_means : (B, T)
-            x_means = jnp.reshape(x_means, (-1, self.time_dim))
 
         return (x_means, jnp.ones_like(x_means) * self.x_log_sigma)
 
@@ -428,6 +450,10 @@ class PhysVAE(nnx.Module):
         self._aux_stats = cfg.aux_priors
 
         self.mask = self.decode.mask
+
+        self.alpha = cfg.alpha
+        self.beta = cfg.beta
+        self.gamma = cfg.gamma
 
     def __call__(self, x: jax.Array, key: jax.Array) -> Distribution:
         """Reconstruct the input"""
