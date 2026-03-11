@@ -1,7 +1,6 @@
 import os
 from typing import Callable
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from numpy.typing import NDArray
@@ -104,14 +103,14 @@ def generate_pendulum_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
 
 def diffusion_PDE(ds: float) -> Callable[[NDArray, NDArray], NDArray]:
     """
-    Create the diffusion-advection dataset from A. Kalousis & N. Takeishi. TKTKTKTKTKTKTK and returns a function that given the timestep and state returns the change in state.
+    Create the diffusion-advection dataset from A. Kalousis & N. Takeishi. TAkes a spatial discretisation and returns a function that given the timestep and state returns the change in state.
 
     This uses spatial discretisation to calculate the partial derivatives.
 
     Parameters
     ----------
     ds : float
-        The descretisation size
+        The discretisation size
 
     Returns
     -------
@@ -157,7 +156,7 @@ def generate_diffusion_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
     t_span = (0, T)
 
     H = 12
-    s = np.linspace(0, 1.0, H)
+    s = np.linspace(0, 2.0, H)
     ds = s[1] - s[0]
 
     samples = np.empty((0, H + 1, steps))
@@ -177,19 +176,6 @@ def generate_diffusion_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
 
         series = np.concatenate([sol.t[None, :], sol.y], axis=0)
         samples = np.append(samples, series[None, :, :], axis=0)
-
-    plt.tight_layout()
-
-    plt.subplot(2, 1, 1)
-    plt.imshow(samples[0, 1:])
-
-    plt.subplot(2, 1, 2)
-    plt.imshow(samples[1, 1:])
-
-    plt.xticks([])
-    plt.yticks([])
-
-    plt.savefig("test.png", format="png")
 
     return samples
 
