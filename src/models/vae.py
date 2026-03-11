@@ -7,6 +7,19 @@ from utils.config.models import ModelArch, VAEConfig
 
 
 class Encoder(nnx.Module):
+    """
+    Convolutional VAE encoder
+
+    Parameters
+    ----------
+    arch : ModelArch
+        The layer specifications
+    latent_dim : int
+        The size of the latent dim
+    rngs : nnx.Rngs
+        The model RNGs
+    """
+
     def __init__(self, arch: ModelArch, latent_dim=2, *, rngs: nnx.Rngs) -> None:
         self.latent_dim = latent_dim
 
@@ -19,6 +32,7 @@ class Encoder(nnx.Module):
             )
 
     def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
+        """Encode image x into latent"""
         for layer in self.layers:
             x = layer(x)
 
@@ -32,6 +46,27 @@ class Encoder(nnx.Module):
 
 
 class Decoder(nnx.Module):
+    """
+    Convolutional VAE decoder
+
+    Parameters
+    ----------
+    arch : ModelArch
+        The layer specifications
+    latent_dim : int
+        The size of the latent dim
+    channel_start : int
+        The number of channels to expand to
+    target_shape : int
+        The final image shape
+    eps : float
+        Epsilon value used to clip probabilities preventing NaNs
+    img_gen : bool = True
+        Whether the network produces 2D images
+    rngs : nnx.Rngs
+        The model RNGs
+    """
+
     def __init__(
         self,
         arch: ModelArch,
@@ -63,6 +98,7 @@ class Decoder(nnx.Module):
             )
 
     def __call__(self, z: jax.Array) -> jax.Array:
+        """Decode the given latent"""
         assert len(z.shape) == 2
         assert z.shape[1] == self.latent_dim
 
@@ -83,6 +119,17 @@ class Decoder(nnx.Module):
 
 
 class VAE(nnx.Module):
+    """
+    Convolutional VAE
+
+    Parameters
+    ----------
+    cfg : VAEConfig
+        The model config including encoder and decoder
+    rngs : nnx.Rngs
+        The model RNGs
+    """
+
     def __init__(self, cfg: VAEConfig, rngs: nnx.Rngs) -> None:
         self.latent_dim = cfg.latent_dim
         self.img_gen = cfg.img_gen
@@ -100,6 +147,7 @@ class VAE(nnx.Module):
         )
 
     def __call__(self, x: jax.Array, key: jax.Array) -> jax.Array:
+        """Reconstruct the input"""
         sample_z = self.encode_and_sample(x, key)
         return self.decode(sample_z)
 
