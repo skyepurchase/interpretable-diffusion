@@ -136,17 +136,17 @@ def augmentation_loss(
         The data augmentation loss
     """
     model.eval()
+
     aug_params = []
-    for aug_param in phys_params:
+    for param, param_range in zip(phys_params, model.phys_param_ranges):
         key, aug_key = jax.random.split(key, 2)
         aug_param = jax.lax.stop_gradient(
             (
-                jax.random.randint(aug_key, aug_param.shape, 0, 1000)
-                # TODO: this hardcoding is not feasible
-                * (3.14 - 0.785)
+                jax.random.randint(aug_key, param.shape, 0, 1000)
+                * (param_range[1] - param_range[0])
                 / 1000
             )
-            + 0.785
+            + param_range[0]
         )
         aug_params.append(aug_param)
 

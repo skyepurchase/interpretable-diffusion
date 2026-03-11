@@ -32,15 +32,20 @@ class PhysVAEConfig:
     encoder: PhysEncoderConfig
     decoder: PhysDecoderConfig
     time_dim: int
-    phys_priors: list[tuple[float, float]]
-    aux_priors: list[tuple[float, float]]
+
+    phys_param_ranges: list[tuple[float, float]]
+
     system: str
     integral_level: int
     timestep: float
     ode_solver: str
+
     alpha: float
     beta: float
     gamma: float
+
+    length: float = 0.0
+    num_grid_points: int = 1
 
 
 @dataclass
