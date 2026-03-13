@@ -59,14 +59,10 @@ def make_diffusion_model(ds: jax.Array) -> Callable[[jax.Array, jax.Array], jax.
 
         # finite differences
         dy_ds = jnp.gradient(interior, ds, axis=1)
-        assert isinstance(dy_ds, jax.Array), (
-            f"Expected spatial derivative to be Array but received {type(dy_ds)}"
-        )
+        assert not isinstance(dy_ds, list)
 
-        d2y_ds2 = jnp.gradient(dy_ds, ds)
-        assert isinstance(d2y_ds2, jax.Array), (
-            f"Expected spatial derivative to be Array but received {type(dy_ds)}"
-        )
+        d2y_ds2 = jnp.gradient(dy_ds, ds, axis=1)
+        assert not isinstance(d2y_ds2, list)
 
         # generate derivatives
         dy_dt = a * d2y_ds2
