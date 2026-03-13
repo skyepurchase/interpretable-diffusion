@@ -320,17 +320,13 @@ class PhysDecoder(nnx.Module):
         if self.solver is None:
             raise NotImplementedError(f"ODE solver {system} is not implemented.")
 
-        self.mask = gen_mask(self.pre_combs + self.post_combs)
+        self.mask = gen_mask(self.pre_combs * self.post_combs)
 
-    def __call__(
-        self,
-        phys_params: list[jax.Array],
-        latents: list[jax.Array],
-        init_y: jax.Array,
-        train=False,
+    def full_forward(
+        self, phys_params: list[jax.Array], latents: list[jax.Array], init_y: jax.Array
     ) -> Distribution:
         """
-        Given physical and auxiliary latents decode the full series based on the initial condition.
+        Used during training to produce all combination of auxiliary functions applied the input.
 
         Parameters
         ----------
@@ -340,28 +336,22 @@ class PhysDecoder(nnx.Module):
             The auxiliary latents
         init_y : Array (B, L)
             The initial condition
-        train : bool = False
-            Whether the model is training or evaluating. Training returns all combinations of auxiliary functions which is unecessary for inference
 
         Returns
         -------
-        series : Distribution (m, B, T) or (B, T)
+        series : Distribution (m, B, T)
             The statistics for the series with the mean and log variance stacked in the first axis
         """
 
         def ODE(t: RealScalarLike, y: PyTree, _args: PyTree):
             """Internal ODE to be solved during the generation process."""
-            # y : (n*B, L*D)
+            # y : (B*n, L*D)
             assert len(y.shape) == 2, f"expected (B*n, L*D) but received {y.shape}"
             assert y.shape[1] == self.ode_dim, (
                 f"expected (B*n, L*D) but received {y.shape}"
             )
-            if train:
-                # ys : (n, B, L*D)
-                ys = jnp.reshape(y, (self.pre_combs, -1, self.ode_dim))
-            else:
-                # ys : (1, B, L*D)
-                ys = y[:, [0, 1]].reshape(1, -1, self.ode_dim)
+            # ys : (n, B, L*D)
+            ys = jnp.reshape(y, (self.pre_combs, -1, self.ode_dim))
 
             # ys_dot_phys : (n, B, L*D)
             ys_dot_phys = jax.vmap(self.physics_model, in_axes=(0, None), out_axes=0)(
@@ -375,26 +365,9 @@ class PhysDecoder(nnx.Module):
             for z_aux, pre_func, selections in zip(
                 latents[: len(self.pre_funcs)], self.pre_funcs, self.pre_selections
             ):
-                if train:
-                    # y : (B, 2), apply : (1,)
-                    def apply_func(y, apply):
-                        return apply * jnp.pad(
-                            pre_func(
-                                jnp.concatenate(
-                                    [z_aux, y, jnp.ones_like(y)[:, 0, None] * t],
-                                    axis=1,
-                                )
-                            ),
-                            # TODO: this allows only control over a single derivative. Is this best?
-                            ((0, 0), (self.ode_dim - self.num_grid_points, 0)),
-                        )
-
-                    # ys_dot_aux : (n, B, L*D)
-                    ys_dot_aux += jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
-                        ys, selections
-                    )
-                else:
-                    ys_dot_aux += jnp.pad(
+                # y : (B, 2), apply : (1,)
+                def apply_func(y, apply):
+                    return apply * jnp.pad(
                         pre_func(
                             jnp.concatenate(
                                 [z_aux, y, jnp.ones_like(y)[:, 0, None] * t],
@@ -405,23 +378,26 @@ class PhysDecoder(nnx.Module):
                         ((0, 0), (self.ode_dim - self.num_grid_points, 0)),
                     )
 
-            # ys_dot : (n*B, L*D)
-            return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.ode_dim))
+                # ys_dot_aux : (n, B, L*D)
+                ys_dot_aux += jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
+                    ys, selections
+                )
 
-        # init_cond : (n*B, L*D)
-        if train:
-            # (B, L*D) => (n*B, L*D)
-            init_cond = jnp.tile(
-                # (B, L) => (B, L*D)
-                jnp.pad(
-                    init_y,
-                    ((0, 0), (0, self.ode_dim - self.num_grid_points)),
-                    mode="empty",
-                ),
-                reps=(self.pre_combs, 1),
-            )
-        else:
-            init_cond = jnp.concatenate([init_y, jnp.zeros_like(init_y)], axis=1)
+            # ys_dot : (B*n, L*D)
+            return jnp.reshape(ys_dot_phys, (-1, self.ode_dim))
+
+        # (B, L*D) => (B*n, L*D)
+        init_cond = jnp.tile(
+            # (B, L) => (B, L*D)
+            jnp.pad(
+                init_y,
+                ((0, 0), (0, self.ode_dim - self.num_grid_points)),
+                mode="empty",
+            ),
+            reps=(self.pre_combs, 1),
+        )
+
+        ODE(self.dt, init_cond, 0)
 
         y_seq = diffeqsolve(
             ODETerm(ODE),
@@ -432,55 +408,136 @@ class PhysDecoder(nnx.Module):
             y0=init_cond,
             saveat=SaveAt(ts=self.t_span),
         ).ys
-        # y_seq : (S, n*B, L*D)
+        # y_seq : (S, B*n, L*D)
         assert y_seq is not None, "Failed to solve ODE"
 
-        # trim_y_seq : (T, n*B, L*D)
-        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level), :, :]
+        # trim_y_seq : (T, B*n, L*D)
+        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
 
-        # x_means : (m, B, T*L)
-        if train:
-            # trim_ys : (T, n, B, L*D)
-            trim_ys = jnp.reshape(
-                trim_y_seq, (self.time_dim, self.pre_combs, -1, self.ode_dim)
-            )
-            # trim_y : (n, B, T, L)
-            trim_y = jnp.permute_dims(
-                trim_ys[:, :, :, : self.num_grid_points], (1, 2, 0, 3)
-            )
-            # x_mean : (n, B, T*L)
-            x_mean = jnp.reshape(trim_y, (self.pre_combs, -1, self.data_dim))
-            x_means = jnp.tile(x_mean, reps=(self.post_combs, 1, 1))
-        else:
-            # x_mean : (B, T*L)
-            x_mean = trim_y_seq[:, :, 0].T
-            x_means = jnp.reshape(x_mean, (-1, self.data_dim))
+        # trim_ys : (T, n, B, L*D)
+        trim_ys = jnp.reshape(
+            trim_y_seq, (self.time_dim, self.pre_combs, -1, self.ode_dim)
+        )
+        # trim_y : (n, B, T, L)
+        trim_y = jnp.permute_dims(
+            trim_ys[:, :, :, : self.num_grid_points], (1, 2, 0, 3)
+        )
+        # x_mean : (n, B, L*T)
+        x_mean = jnp.reshape(trim_y, (self.pre_combs, -1, self.data_dim))
+        # x_means : (m, B, L*T)
+        x_means = jnp.tile(x_mean, reps=(self.post_combs, 1, 1))
 
         for z_aux, post_func, selections in zip(
             latents[len(self.pre_funcs) : len(self.post_funcs) + 1],
             self.post_funcs,
             self.post_selections,
         ):
-            if train:
-                # x_mean : (B, T*L), apply : (1,)
-                def apply_func(x_mean, apply):
-                    return (1 - apply) * x_mean + apply * jnp.pad(
-                        post_func(jnp.concatenate([z_aux, x_mean], axis=1)),
-                        ((0, 0), (self.num_grid_points, 0)),
-                        mode="empty",
-                    )
-
-                # x_means : (m, B, T*L)
-                x_means += jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
-                    x_means, selections
-                )
-            else:
-                # x_means : (B, T*L)
-                x_means += jnp.pad(
+            # x_mean : (B, L*T), apply : (1,)
+            def apply_func(x_mean, apply):
+                return (1 - apply) * x_mean + apply * jnp.pad(
                     post_func(jnp.concatenate([z_aux, x_mean], axis=1)),
                     ((0, 0), (self.num_grid_points, 0)),
                     mode="empty",
                 )
+
+            # x_means : (m, B, L*T)
+            x_means += jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
+                x_means, selections
+            )
+
+        return (x_means, jnp.ones_like(x_means) * self.x_log_sigma)
+
+    def __call__(
+        self,
+        phys_params: list[jax.Array],
+        latents: list[jax.Array],
+        init_y: jax.Array,
+    ) -> Distribution:
+        """
+        Given physical and auxiliary latents decode the full series based on the initial condition.
+
+        Parameters
+        ----------
+        phys_params : list[jax.Array] [(B, Z)]
+            The physical latents
+        latents : list[jax.Array] [(B, Z)]
+            The auxiliary latents
+        init_y : Array (B, L)
+            The initial condition
+
+        Returns
+        -------
+        series : Distribution (B, T)
+            The statistics for the series with the mean and log variance stacked in the first axis
+        """
+
+        def ODE(t: RealScalarLike, y: PyTree, _args: PyTree):
+            """Internal ODE to be solved during the generation process."""
+            # y : (B, L*D)
+            assert len(y.shape) == 2, f"expected (B, L*D) but received {y.shape}"
+            assert y.shape[1] == self.ode_dim, (
+                f"expected (B, L*D) but received {y.shape}"
+            )
+            # ys : (B, L*D)
+            ys = y[:, : self.ode_dim].reshape(-1, self.ode_dim)
+
+            # ys_dot_phys : (B, L*D)
+            ys_dot_phys = self.physics_model(ys, *phys_params)
+
+            # ys_dot_aux : (B, L*D)
+            ys_dot_aux = jnp.zeros_like(ys_dot_phys)
+
+            # selections : (n, 1), z_aux : (B, Z)
+            for z_aux, pre_func, selections in zip(
+                latents[: len(self.pre_funcs)], self.pre_funcs, self.pre_selections
+            ):
+                ys_dot_aux += jnp.pad(
+                    pre_func(
+                        jnp.concatenate(
+                            [z_aux, y, jnp.ones_like(y)[:, 0, None] * t],
+                            axis=1,
+                        )
+                    ),
+                    # TODO: this allows only control over a single derivative. Is this best?
+                    ((0, 0), (self.ode_dim - self.num_grid_points, 0)),
+                )
+
+            # ys_dot : (B, L*D)
+            return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.ode_dim))
+
+        # init_cond : (B, L*D)
+        init_cond = jnp.pad(init_y, ((0, 0), (0, self.ode_dim - self.num_grid_points)))
+
+        y_seq = diffeqsolve(
+            ODETerm(ODE),
+            self.solver(),
+            t0=0.0,
+            t1=self.t1,
+            dt0=self.dt,
+            y0=init_cond,
+            saveat=SaveAt(ts=self.t_span),
+        ).ys
+        # y_seq : (S, B, L*D)
+        assert y_seq is not None, "Failed to solve ODE"
+
+        # trim_y_seq : (T, B, L*D)
+        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
+
+        # x_mean : (B, T, L)
+        x_mean = jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2))
+        # x_means : (B, L*T)
+        x_means = jnp.reshape(x_mean, (-1, self.data_dim))
+
+        for z_aux, post_func in zip(
+            latents[len(self.pre_funcs) : len(self.post_funcs) + 1],
+            self.post_funcs,
+        ):
+            # x_means : (B, L*T)
+            x_means += jnp.pad(
+                post_func(jnp.concatenate([z_aux, x_means], axis=1)),
+                ((0, 0), (self.num_grid_points, 0)),
+                mode="empty",
+            )
 
         return (x_means, jnp.ones_like(x_means) * self.x_log_sigma)
 
@@ -505,6 +562,10 @@ class PhysVAE(nnx.Module):
         self.t_span = jnp.linspace(
             0.0, self.integral_step * (self.integral_len - 1), self.integral_len
         )
+        self.num_grid_points = cfg.num_grid_points
+        self.ode_dim = self.num_grid_points * NUM_DERIVATIVES.get(cfg.system, 1)
+        self.data_dim = self.num_grid_points * cfg.time_dim
+
         num_phys_params = NUM_PHYS_PARAMS[cfg.system]
 
         assert len(range(0, self.integral_len, self.integral_level)) == cfg.time_dim, (
@@ -603,7 +664,7 @@ class PhysVAE(nnx.Module):
         def ODE(_t: RealScalarLike, y: PyTree, _args: PyTree):
             return self.decode.physics_model(y, *params)
 
-        init_cond = jnp.concatenate([init_y, jnp.zeros_like(init_y)], axis=1)
+        init_cond = jnp.pad(init_y, ((0, 0), (0, self.ode_dim - self.num_grid_points)))
 
         y_seq = diffeqsolve(
             ODETerm(ODE),
@@ -616,7 +677,14 @@ class PhysVAE(nnx.Module):
         ).ys
         assert y_seq is not None, "Failed to solve ODE"
 
-        return y_seq[jnp.arange(0, self.integral_len, self.integral_level), :, 0].T
+        trim_y_seq = y_seq[
+            jnp.arange(0, self.integral_len, self.integral_level),
+            :,
+            : self.num_grid_points,
+        ]
+        perm_y = jnp.permute_dims(trim_y_seq, (1, 0, 2))
+
+        return jnp.reshape(perm_y, (-1, self.data_dim))
 
     def sample_latents(
         self,
