@@ -19,8 +19,11 @@ class PiVAEDataset(Dataset):
 
     def __init__(self, series: NDArray) -> None:
         super().__init__()
-        self.data = torch.tensor(series[:, 1:, :]).flatten(start_dim=1)
-        self.timestep = torch.tensor(series[:, 0, :]).flatten(start_dim=1)
+        # series is in the form (B, x, t) flattened would give (B, t*x)
+        # Instead (B, x*t) is desired so data[:, :12] gives the initial condition. Thus (B, t, x)
+        time_forward = np.permute_dims(series[:, 1:], (0, 2, 1))
+        self.data = torch.tensor(time_forward).flatten(start_dim=1)
+        self.timestep = torch.tensor(series[:, 0]).flatten(start_dim=1)
 
     def __len__(self) -> int:
         return len(self.data)
@@ -93,10 +96,8 @@ def generate_pendulum_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
             atol=1e-6,
         )
 
-        series = np.concatenate(
-            [sol.t[None, :], np.expand_dims(sol.y[0], axis=0)], axis=0
-        )
-        samples = np.append(samples, series[None, :, :], axis=0)
+        series = np.concatenate([sol.t[None], np.expand_dims(sol.y[0], axis=0)], axis=0)
+        samples = np.append(samples, series[None], axis=0)
 
     return samples
 
@@ -174,8 +175,8 @@ def generate_diffusion_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
             atol=1e-6,
         )
 
-        series = np.concatenate([sol.t[None, :], sol.y], axis=0)
-        samples = np.append(samples, series[None, :, :], axis=0)
+        series = np.concatenate([sol.t[None], sol.y], axis=0)
+        samples = np.append(samples, series[None], axis=0)
 
     return samples
 
