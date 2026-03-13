@@ -708,12 +708,19 @@ class PhysVAE(nnx.Module):
             The sampled auxiliary latents
         """
         phys_latents = []
-        for stat in phys_stats:
+        for stat, param_range in zip(phys_stats, self.phys_param_ranges):
             key, sample_key = jax.random.split(key, 2)
-            phys_latents.append(
-                stat[0]
-                + jax.random.normal(sample_key, stat[0].shape) * jnp.exp(stat[1])
+
+            samples = stat[0] + (
+                jax.random.normal(sample_key, stat[0].shape) * jnp.exp(stat[1])
             )
+
+            # scaled_param in [param_range[0]/2, 2*param_range[1]]
+            scaled_param = (
+                nnx.sigmoid(samples) * ((2 * param_range[1]) - (param_range[0] / 2))
+            ) + (param_range[0] / 2)
+
+            phys_latents.append(scaled_param)
 
         aux_latents = []
         for stat in aux_stats:
