@@ -75,7 +75,7 @@ def reconstruct_point_series(
 
 def reconstruct_1D_series(model: nnx.Module, series: jax.Array, key: jax.Array):
     """
-    Given a VAE trained on 1D time series data and sample series produce reconstructions of the series.
+    Given a physics integrated VAE trained on 1D time series data and sample series produce reconstructions of the series.
 
     Parameters
     ----------
@@ -91,13 +91,19 @@ def reconstruct_1D_series(model: nnx.Module, series: jax.Array, key: jax.Array):
     reconstructions : jax.Array
         The reconstructed series
     """
-    if not isinstance(model, VAE):
+    if not isinstance(model, PhysVAE):
         raise TypeError(f"Expected model to be a VAE but received {type(model)}.")
 
     model.eval()
 
     key, enc_key = jax.random.split(key)
-    latents = model.encode_and_sample(series, key=enc_key)
+
+    phys_stats, aux_stats, _ = model.encode(series)
+    phys_latents, aux_latents = model.sample_latents(phys_stats, aux_stats, enc_key)
+    init_y = series[:, : model.num_grid_points]
 
     # TODO: make this dynamic
-    return jnp.split(model.decode(latents), 2)[0].reshape(-1, 12, 50, 1)
+    return jnp.permute_dims(
+        model.decode(phys_latents, aux_latents, init_y)[0].reshape(-1, 50, 12, 1),
+        (0, 2, 1, 3),
+    )

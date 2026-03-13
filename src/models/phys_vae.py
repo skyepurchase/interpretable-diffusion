@@ -285,7 +285,12 @@ class PhysDecoder(nnx.Module):
             )
             self.pre_funcs.append(func)
         self.pre_combs = 2**self.num_pre_funcs
-        self.pre_selections = gen_selections(self.num_pre_funcs)
+
+        if self.num_pre_funcs > 0:
+            self.pre_selections = gen_selections(self.num_pre_funcs)
+        else:
+            # Dummy to aid saving
+            self.pre_selections = jnp.zeros((1))
 
         for func_cfg in cfg.post_funcs:
             func = make_mlp(
@@ -297,9 +302,13 @@ class PhysDecoder(nnx.Module):
             )
             self.post_funcs.append(func)
         self.post_combs = 2**self.num_post_funcs
-        self.post_selections = gen_selections(self.num_pre_funcs + self.num_post_funcs)[
-            self.num_pre_funcs :
-        ]
+        if self.num_post_funcs > 0:
+            self.post_selections = gen_selections(
+                self.num_pre_funcs + self.num_post_funcs
+            )[self.num_pre_funcs :]
+        else:
+            # Dummy to aid saving
+            self.post_selections = jnp.zeros((1))
 
         if self.num_grid_points > 1:
             ds = L / (self.num_grid_points - 1)
