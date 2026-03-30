@@ -389,7 +389,7 @@ class PhysDecoder(nnx.Module):
                 )
 
             # ys_dot : (B*n, L*D)
-            return jnp.reshape(ys_dot_phys, (-1, self.ode_dim))
+            return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.ode_dim))
 
         # (B, L*D) => (B*n, L*D)
         init_cond = jnp.tile(
@@ -401,8 +401,6 @@ class PhysDecoder(nnx.Module):
             ),
             reps=(self.pre_combs, 1),
         )
-
-        ODE(self.dt, init_cond, 0)
 
         y_seq = diffeqsolve(
             ODETerm(ODE),
