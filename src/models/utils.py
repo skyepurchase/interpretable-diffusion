@@ -1,39 +1,53 @@
 import os
 import shutil
 from datetime import datetime
-from typing import Callable
+from typing import Optional
 
-import jax
 import orbax.checkpoint as ocp
 from flax import nnx
 from flax.nnx import Rngs
-from torch.utils.data import DataLoader
 
-from models.train_ddim import train_ddim
-from utils.config.models import DDIMConfig, VAEConfig
-from utils.config.trainer import TrainerConfig
+from models.phys_vae import PhysVAE
+from models.train_ddim import train_step as ddim_step
+from models.train_phys_vae import train_step as phys_vae_step
+from models.train_vae import train_step as vae_step
+from utils.config.models import DDIMConfig, PhysVAEConfig, VAEConfig
+from utils.misc import TrainStep
 
 from .ddim import DDIM
-from .train_vae import train_vae
 from .vae import VAE
 
 MODELS = {
     "vae": (VAE, VAEConfig),
     "ddim": (DDIM, DDIMConfig),
+    "phys_vae": (PhysVAE, PhysVAEConfig),
 }
 
-TRAINERS = {
-    "vae": train_vae,
-    "ddim": train_ddim,
+TRAIN_STEPPER: dict[str, TrainStep] = {
+    "ddim": ddim_step,
+    "vae": vae_step,
+    "phys_vae": phys_vae_step,
 }
 
-TrainerFn = Callable[[nnx.Module, DataLoader, TrainerConfig, jax.Array], None]
+LOSS_LABELS: dict[str, list[str]] = {
+    "ddim": ["loss"],
+    "vae": ["loss"],
+    "phys_vae": [
+        "loss",
+        "reconstruction",
+        "kl",
+        "discrepancy",
+        "physics",
+        "augmentation",
+    ],
+}
 
 
 def make_model(name: str, cfg, rngs: Rngs) -> nnx.Module:
     """Create a model object based on the name and assorted config"""
     if name in MODELS:
         model, config = MODELS[name]
+
         return model(config(**cfg), rngs)
 
     raise NotImplementedError(f"Model {name} not implemented")
@@ -74,9 +88,9 @@ def save_model(model: nnx.Module, folder: str) -> None:
 
 def get_trainer(
     name: str,
-) -> TrainerFn:
+) -> tuple[TrainStep, Optional[list[str]]]:
     """Return the relevant trainer function for the desired model"""
-    if name in TRAINERS:
-        return TRAINERS[name]
+    if name in TRAIN_STEPPER:
+        return TRAIN_STEPPER[name], LOSS_LABELS[name]
 
     raise NotImplementedError(f"Trainer for {name} not implemented")

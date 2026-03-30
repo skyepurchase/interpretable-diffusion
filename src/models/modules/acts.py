@@ -5,4 +5,5 @@ ACTS = {
     "sigmoid": nnx.sigmoid,
     "identity": lambda x: x,
     "swish": nnx.swish,
+    "elu": nnx.elu,
 }

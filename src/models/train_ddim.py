@@ -1,14 +1,10 @@
 import jax
 import jax.numpy as jnp
 import jax.random
-import optax
 from flax import nnx
 from jax.random import split
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from models.ddim import DDIM
-from utils.config.trainer import TrainerConfig
 
 
 def noise_estimation_loss(
@@ -26,7 +22,7 @@ def noise_estimation_loss(
 
 @nnx.jit
 def train_step(
-    model: DDIM, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
+    model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
 ) -> jax.Array:
     """
     Carry out a single train step; randomly sample noise and time steps, calculate the model loss, perform gradient descent.
@@ -41,12 +37,17 @@ def train_step(
         The optimizer with the model parameters
     key : Array
         PRNG key
+    epoch : int
+        The current epoch, used for logging
 
     Returns
     -------
-    loss : Array
-        The mean error for the data sample
+    losses : Array
+        Loss data to be logged
     """
+    if not isinstance(model, DDIM):
+        raise TypeError(f"Expected model type to be DDIM not {type(model)}")
+
     batch_size = data.shape[0]
     betas = model.betas
 
@@ -63,38 +64,4 @@ def train_step(
     )
     optimizer.update(model, grads)
 
-    return loss
-
-
-def train_ddim(
-    model: nnx.Module, dataloader: DataLoader, cfg: TrainerConfig, key: jax.Array
-):
-    """
-    Train a DDIM model given a dataset loader.
-
-    Parameters
-    ----------
-    model : DDIM
-        The model to train
-    dataloader : DataLoader
-        A dataloader for the given dataset
-    cfg : TrainerConfig
-        Config specifying epochs and learning rate
-    key : Array
-        PRNG key
-    """
-    assert isinstance(model, DDIM)
-
-    optimizer = nnx.Optimizer(model, optax.adam(cfg.lr), wrt=nnx.Param)
-
-    pbar = tqdm(range(cfg.epochs), desc="Training")
-    for _ in pbar:
-        running_loss = 0
-
-        for imgs, _ in tqdm(dataloader, desc="Iterating images", leave=False):
-            key, train_key = split(key, num=2)
-            loss = train_step(model, imgs, optimizer, key=train_key)
-
-            running_loss += loss
-
-        pbar.set_description(f"Training, loss={running_loss:.2f}")
+    return loss[None]
