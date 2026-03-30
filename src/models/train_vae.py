@@ -107,4 +107,5 @@ def train_step(
 
     loss, grads = nnx.value_and_grad(ELBO_loss)(model, data, key)
     optimizer.update(model, grads)
-    return loss
+
+    return loss[None]

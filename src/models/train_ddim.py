@@ -64,4 +64,4 @@ def train_step(
     )
     optimizer.update(model, grads)
 
-    return loss
+    return loss[None]
