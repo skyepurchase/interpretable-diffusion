@@ -99,12 +99,13 @@ def train_step(
 
     Returns
     -------
-    loss : Array
-        The loss of the model on this datapoint
+    losses : Array
+        Loss data to be logged
     """
     if not isinstance(model, VAE):
         raise TypeError(f"Expected model to be type VAE not {type(model)}")
 
     loss, grads = nnx.value_and_grad(ELBO_loss)(model, data, key)
     optimizer.update(model, grads)
-    return loss
+
+    return loss[None]

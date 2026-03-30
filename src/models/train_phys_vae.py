@@ -199,7 +199,9 @@ def discrepancy_loss(x_stats: Distribution, mask: jax.Array) -> jax.Array:
     return masked_divs.sum() / mask.sum()
 
 
-def loss_fn(model: PhysVAE, data: jax.Array, key: jax.Array) -> jax.Array:
+def loss_fn(
+    model: PhysVAE, data: jax.Array, key: jax.Array
+) -> tuple[jax.Array, jax.Array]:
     """
     Container function for the separated losses described in Takeishi & Kalousis.
 
@@ -239,28 +241,28 @@ def loss_fn(model: PhysVAE, data: jax.Array, key: jax.Array) -> jax.Array:
 
     # Physics latent grounding
     # first entry in x_stat is the physics only generation
-    phys_loss = physics_only_loss(phys_only, x_stat[0][0])
+    phys_loss = model.beta * physics_only_loss(phys_only, x_stat[0][0])
 
     # Decoder grounding
     key, aug_key = jax.random.split(key, 2)
-    data_aug_loss = augmentation_loss(model, phys_latents, init_y, aug_key)
+    data_aug_loss = model.gamma * augmentation_loss(
+        model, phys_latents, init_y, aug_key
+    )
 
     # Discrepancy loss
-    disc_loss = discrepancy_loss(x_stat, model.mask)
+    disc_loss = model.alpha * discrepancy_loss(x_stat, model.mask)
 
-    return (
-        rec_err
-        + kldiv
-        + (model.alpha * disc_loss)
-        + (model.beta * phys_loss)
-        + (model.gamma * data_aug_loss)
+    full_loss = rec_err + kldiv + disc_loss + phys_loss + data_aug_loss
+
+    return full_loss, jnp.stack(
+        [full_loss, rec_err, kldiv, disc_loss, phys_loss, data_aug_loss]
     )
 
 
 @nnx.jit
 def train_step(
     model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
-):
+) -> jax.Array:
     """
     Carry out a single VAE train step
 
@@ -274,12 +276,16 @@ def train_step(
         The optimizer for the models parameters
     key : Array
         PRNG key
-    output_dist : str = bernoulli
-        The distribution to use for the output
+
+    Returns
+    -------
+    losses : Array
+        Loss data to be logged
     """
     if not isinstance(model, PhysVAE):
         raise TypeError(f"Expected model to be type PhysVAE not {type(model)}")
 
-    loss, grads = nnx.value_and_grad(loss_fn)(model, data, key)
+    (_, losses), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, data, key)
     optimizer.update(model, grads)
-    return loss
+
+    return losses

@@ -37,11 +37,13 @@ def train_step(
         The optimizer with the model parameters
     key : Array
         PRNG key
+    epoch : int
+        The current epoch, used for logging
 
     Returns
     -------
-    loss : Array
-        The mean error for the data sample
+    losses : Array
+        Loss data to be logged
     """
     if not isinstance(model, DDIM):
         raise TypeError(f"Expected model type to be DDIM not {type(model)}")
@@ -62,4 +64,4 @@ def train_step(
     )
     optimizer.update(model, grads)
 
-    return loss
+    return loss[None]
