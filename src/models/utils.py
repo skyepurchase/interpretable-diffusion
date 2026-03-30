@@ -1,6 +1,7 @@
 import os
 import shutil
 from datetime import datetime
+from typing import Optional
 
 import orbax.checkpoint as ocp
 from flax import nnx
@@ -26,6 +27,19 @@ TRAIN_STEPPER: dict[str, TrainStep] = {
     "ddim": ddim_step,
     "vae": vae_step,
     "phys_vae": phys_vae_step,
+}
+
+LOSS_LABELS: dict[str, list[str]] = {
+    "ddim": ["loss"],
+    "vae": ["loss"],
+    "phys_vae": [
+        "loss",
+        "reconstruction",
+        "kl",
+        "discrepancy",
+        "physics",
+        "augmentation",
+    ],
 }
 
 
@@ -74,9 +88,9 @@ def save_model(model: nnx.Module, folder: str) -> None:
 
 def get_trainer(
     name: str,
-) -> TrainStep:
+) -> tuple[TrainStep, Optional[list[str]]]:
     """Return the relevant trainer function for the desired model"""
     if name in TRAIN_STEPPER:
-        return TRAIN_STEPPER[name]
+        return TRAIN_STEPPER[name], LOSS_LABELS[name]
 
     raise NotImplementedError(f"Trainer for {name} not implemented")

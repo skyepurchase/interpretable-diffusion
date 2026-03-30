@@ -241,22 +241,18 @@ def loss_fn(
 
     # Physics latent grounding
     # first entry in x_stat is the physics only generation
-    phys_loss = physics_only_loss(phys_only, x_stat[0][0])
+    phys_loss = model.beta * physics_only_loss(phys_only, x_stat[0][0])
 
     # Decoder grounding
     key, aug_key = jax.random.split(key, 2)
-    data_aug_loss = augmentation_loss(model, phys_latents, init_y, aug_key)
+    data_aug_loss = model.gamma * augmentation_loss(
+        model, phys_latents, init_y, aug_key
+    )
 
     # Discrepancy loss
-    disc_loss = discrepancy_loss(x_stat, model.mask)
+    disc_loss = model.alpha * discrepancy_loss(x_stat, model.mask)
 
-    full_loss = (
-        rec_err
-        + kldiv
-        + (model.alpha * disc_loss)
-        + (model.beta * phys_loss)
-        + (model.gamma * data_aug_loss)
-    )
+    full_loss = rec_err + kldiv + disc_loss + phys_loss + data_aug_loss
 
     return full_loss, jnp.stack(
         [full_loss, rec_err, kldiv, disc_loss, phys_loss, data_aug_loss]

@@ -1,6 +1,7 @@
 from argparse import ArgumentParser
 from collections import defaultdict
 from datetime import datetime
+from typing import Optional
 
 import jax
 import optax
@@ -26,6 +27,7 @@ def train(
     dataloader: DataLoader,
     cfg: TrainerConfig,
     key: jax.Array,
+    loss_labels: Optional[list[str]] = None,
     run: str = "",
 ):
     """
@@ -41,12 +43,14 @@ def train(
         Config specifying epochs and learning rate
     key : Array
         PRNG key
-    run : str
+    loss_labels : list[str] = None
+        The labels for each loss term
+    run : str = ""
         The name of the current run
     """
     trackio.init(
         project="Interpretable Diffusion",
-        name=run,
+        name=run + "_" + datetime.now().strftime("%m%d-%H%M"),
         config={
             "epochs": cfg.epochs,
             "learning_rate": cfg.lr,
@@ -67,12 +71,17 @@ def train(
 
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 
-            for i, value in enumerate(losses):
-                running_loss[f"loss_{i}"] += value.item() / len(dataloader)
+            if not loss_labels:
+                loss_labels = ["loss"] + [
+                    f"sub_loss_{i + 1}" for i in range(len(losses) - 1)
+                ]
+
+            for loss_label, loss in zip(loss_labels, losses):
+                running_loss[loss_label] += loss.item() / len(dataloader)
 
         trackio.log(running_loss)
 
-        pbar.set_description(f"Training, loss={running_loss['loss_0']:.2f}")
+        pbar.set_description(f"Training, loss={running_loss['loss']:.2f}")
 
     trackio.finish()
 
@@ -93,17 +102,18 @@ if __name__ == "__main__":
 
     model = make_model(config.model, config.model_config, rngs=rngs)
 
-    train_step = get_trainer(config.model)
-    key, subkey = split(key)
+    train_step, loss_labels = get_trainer(config.model)
 
     run_name = "_".join([config.model, config.dataset, str(args.seed)])
 
+    key, subkey = split(key)
     train(
         model,
         train_step,
         train_loader,
         TrainerConfig(**config.trainer_config),
         subkey,
+        loss_labels=loss_labels,
         run=run_name,
     )
 
