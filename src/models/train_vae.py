@@ -99,8 +99,8 @@ def train_step(
 
     Returns
     -------
-    loss : Array
-        The loss of the model on this datapoint
+    losses : Array
+        Loss data to be logged
     """
     if not isinstance(model, VAE):
         raise TypeError(f"Expected model to be type VAE not {type(model)}")

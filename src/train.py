@@ -1,8 +1,10 @@
 from argparse import ArgumentParser
+from collections import defaultdict
 from datetime import datetime
 
 import jax
 import optax
+import trackio
 from flax import nnx
 from jax.random import PRNGKey, split
 from torch.utils.data import DataLoader
@@ -24,6 +26,7 @@ def train(
     dataloader: DataLoader,
     cfg: TrainerConfig,
     key: jax.Array,
+    run: str = "",
 ):
     """
     Train a model given a dataset loader.
@@ -38,20 +41,40 @@ def train(
         Config specifying epochs and learning rate
     key : Array
         PRNG key
+    run : str
+        The name of the current run
     """
+    trackio.init(
+        project="Interpretable Diffusion",
+        name=run,
+        config={
+            "epochs": cfg.epochs,
+            "learning_rate": cfg.lr,
+            # TODO: pass batch_size here
+            "batch_size": next(iter(dataloader))[0].shape[0],
+        },
+    )
+
     optimizer = nnx.Optimizer(model, optax.adam(cfg.lr, eps=cfg.eps), wrt=nnx.Param)
 
     pbar = tqdm(range(cfg.epochs), desc="Training")
     for _ in pbar:
-        running_loss = 0
+        running_loss = defaultdict(float)
 
         for imgs, _ in tqdm(dataloader, desc="Iterating images", leave=False):
             key, train_key = split(key, num=2)
-            loss = train_step(model, imgs, optimizer, key=train_key)
+            losses = train_step(model, imgs, optimizer, key=train_key)
 
-            running_loss += loss
+            assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 
-        pbar.set_description(f"Training, loss={running_loss:.2f}")
+            for i, value in enumerate(losses):
+                running_loss[f"loss_{i}"] += value.item() / len(dataloader)
+
+        trackio.log(running_loss)
+
+        pbar.set_description(f"Training, loss={running_loss['loss_0']:.2f}")
+
+    trackio.finish()
 
 
 if __name__ == "__main__":
@@ -73,8 +96,15 @@ if __name__ == "__main__":
     train_step = get_trainer(config.model)
     key, subkey = split(key)
 
+    run_name = "_".join([config.model, config.dataset, str(args.seed)])
+
     train(
-        model, train_step, train_loader, TrainerConfig(**config.trainer_config), subkey
+        model,
+        train_step,
+        train_loader,
+        TrainerConfig(**config.trainer_config),
+        subkey,
+        run=run_name,
     )
 
     save_model(model, config.checkpoint_dir)

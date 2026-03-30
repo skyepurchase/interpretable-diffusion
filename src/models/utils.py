@@ -22,7 +22,7 @@ MODELS = {
     "phys_vae": (PhysVAE, PhysVAEConfig),
 }
 
-TRAIN_STEPPER = {
+TRAIN_STEPPER: dict[str, TrainStep] = {
     "ddim": ddim_step,
     "vae": vae_step,
     "phys_vae": phys_vae_step,
