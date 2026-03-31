@@ -20,6 +20,13 @@ class PiVAEConfig:
     batch_size: int = 128
 
 
+@dataclass
+class PDEBenchConfig:
+    dir: str
+    system: str
+    batch_size: int = 128
+
+
 def get_full_dataset_name(dataset: str, config: dict) -> str:
     """
     Get the full hiphenated dataset name if the dataset has subnames

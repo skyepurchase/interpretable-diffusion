@@ -1,19 +1,22 @@
 from pydantic import ValidationError
 from torch.utils.data import DataLoader
 
-from utils.config.datasets import DatasetConfig, PiVAEConfig
+from utils.config.datasets import DatasetConfig, PDEBenchConfig, PiVAEConfig
 
 from .mnist import get_MNIST
+from .pdebench import get_pdebench
 from .pivae import get_pivae
 
 DATASETS = {
     "mnist": get_MNIST,
     "pivae": get_pivae,
+    "pdebench": get_pdebench,
 }
 
 CONFIG = {
     "mnist": DatasetConfig,
     "pivae": PiVAEConfig,
+    "pdebench": PDEBenchConfig,
 }
 
 
