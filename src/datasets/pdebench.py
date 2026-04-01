@@ -12,6 +12,10 @@ SYSTEM_TO_DIR: dict[str, str] = {
     "diff_sorp": "data/pdebench/1D/diffusion-sorption/1D_diff-sorp_NA_NA.h5"
 }
 
+SYSTEM_TO_LINK: dict[str, str] = {
+    "diff_sorp": "https://darus.uni-stuttgart.de/api/access/datafile/133020"
+}
+
 
 class PDEBenchDataset(Dataset):
     """
@@ -81,15 +85,14 @@ class PDEBenchDataset(Dataset):
 
 def get_pdebench(cfg: PDEBenchConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
     if cfg.system not in SYSTEM_TO_DIR:
-        print(f"""
-1. Clone `pdebench` from https://github.com/pdebench/PDEBench
-2. `cd` into the directory and `cd pdebench/data_download`
-3. run `uv sync` (you may need to remove the optional dependencies in `pyproject.toml`)
-4. run
-```
-python download_direct.py --root_folder <path-to-this-repo>/data/pdebench --pde_name {cfg.system}
-```
-        """)
+        print(f"{cfg.system} is not supported.")
+        quit(1)
+
+    if not os.path.isfile(SYSTEM_TO_DIR[cfg.system]):
+        print(
+            f"Data files do not exist please download them from {SYSTEM_TO_LINK[cfg.system]}."
+        )
+        quit(1)
 
     dataset = PDEBenchDataset(SYSTEM_TO_DIR[cfg.system])
     test = PDEBenchDataset(SYSTEM_TO_DIR[cfg.system])
