@@ -4,12 +4,13 @@ import h5py
 import torch
 from torch.utils import data
 from torch.utils.data import DataLoader, Dataset
+from torchvision.datasets.utils import download_url
 
 from datasets.utils import np_collate
 from utils.config.datasets import PDEBenchConfig
 
 SYSTEM_TO_DIR: dict[str, str] = {
-    "diff_sorp": "data/pdebench/1D/diffusion-sorption/1D_diff-sorp_NA_NA.h5"
+    "diff_sorp": "data/pdebench/diffusion-sorption/data.h5"
 }
 
 SYSTEM_TO_LINK: dict[str, str] = {
@@ -89,10 +90,12 @@ def get_pdebench(cfg: PDEBenchConfig) -> tuple[DataLoader, DataLoader, DataLoade
         quit(1)
 
     if not os.path.isfile(SYSTEM_TO_DIR[cfg.system]):
-        print(
-            f"Data files do not exist please download them from {SYSTEM_TO_LINK[cfg.system]}."
+        print("Data file not found. Downloading data ...")
+        download_url(
+            SYSTEM_TO_LINK[cfg.system],
+            os.path.dirname(SYSTEM_TO_DIR[cfg.system]),
+            os.path.basename(SYSTEM_TO_DIR[cfg.system]),
         )
-        quit(1)
 
     dataset = PDEBenchDataset(SYSTEM_TO_DIR[cfg.system])
     test = PDEBenchDataset(SYSTEM_TO_DIR[cfg.system])
