@@ -32,6 +32,7 @@ class PDEBenchDataset(Dataset):
 
         with h5py.File(data_file, "r") as file:
             data = []
+            t = None
 
             indices = list(file.keys())
             if test:
@@ -44,8 +45,22 @@ class PDEBenchDataset(Dataset):
 
                 assert isinstance(entry, h5py.Group), "Expected entry to be group"
                 assert "data" in entry, "Expected entry to contain 'data' object"
+                assert "grid" in entry, "Expected entry to contain 'grid' object"
 
                 entry_data = entry["data"]
+                entry_grid = entry["grid"]
+
+                assert isinstance(entry_grid, h5py.Group), "Expected grid to be group"
+                assert "t" in entry_grid, "Expected grid to contain 't' object"
+                entry_t = entry_grid["t"]
+                assert isinstance(entry_t, h5py.Dataset), "Expected 't' to be dataset"
+
+                if t is None:
+                    t = entry_t[:]
+                else:
+                    assert (t == entry_t[:]).all(), (
+                        f"Expected all indices to have the same time discretisation. Index {index} does not"
+                    )
 
                 assert isinstance(entry_data, h5py.Dataset), (
                     "Expected 'data' object to be dataset"
@@ -53,13 +68,15 @@ class PDEBenchDataset(Dataset):
 
                 data.append(torch.tensor(entry_data[:]).flatten())
 
+        assert t is not None, "No time discretisation found"
+        self.t = torch.tensor(t)
         self.data = torch.vstack(data)
 
     def __len__(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, index) -> torch.Tensor:
-        return self.data[index]
+    def __getitem__(self, index) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.data[index], self.t.clone()
 
 
 def get_pdebench(cfg: PDEBenchConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
