@@ -5,17 +5,30 @@ from flax import nnx
 from jax.random import split
 
 from models.ddim import DDIM
+from models.phys_ddim import PAID
 
 
 def noise_estimation_loss(
-    model: DDIM, data: jax.Array, t: jax.Array, noise: jax.Array, betas: jax.Array
+    model: DDIM | PAID,
+    data: jax.Array,
+    t: jax.Array,
+    noise: jax.Array,
+    betas: jax.Array,
 ) -> jax.Array:
     """
     This implementation matches that in the original DDIM paper https://github.com/ermongroup/ddim/blob/main/functions/losses.py.
     """
     alpha = (1 - betas).cumprod(axis=0)[t].reshape(-1, 1, 1, 1)
     x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
-    output = model(x, t)
+    output = model(jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), t)
+
+    if sum(model.pad[0]) > 0:
+        output = output[:, model.pad[0][0] : -model.pad[0][1], :, :]
+
+    if sum(model.pad[1]) > 0:
+        output = output[:, :, model.pad[1][0] : -model.pad[1][1], :]
+
+    assert output.shape == noise.shape
 
     return jnp.square(noise - output).sum(axis=(1, 2, 3)).mean(axis=0)
 
@@ -45,8 +58,11 @@ def train_step(
     losses : Array
         Loss data to be logged
     """
-    if not isinstance(model, DDIM):
+    if not isinstance(model, DDIM) and not isinstance(model, PAID):
         raise TypeError(f"Expected model type to be DDIM not {type(model)}")
+
+    if len(data.shape) < 4:
+        data = jnp.expand_dims(data, 3)
 
     batch_size = data.shape[0]
     betas = model.betas

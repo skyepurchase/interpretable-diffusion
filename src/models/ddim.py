@@ -61,6 +61,8 @@ class DDIM(nnx.Module):
             rngs=rngs,
         )
 
+        self.pad = cfg.pad
+
     def __call__(self, x: jax.Array, t: jax.Array) -> jax.Array:
         """Wrapper to return the output itself"""
         return self.denoiser(x, t).output

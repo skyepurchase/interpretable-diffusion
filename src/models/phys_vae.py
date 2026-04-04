@@ -204,7 +204,7 @@ class PhysEncoder(nnx.Module):
 
         phys_stats = []
         for phys_func in self.phys_funcs:
-            mu, log_sigma = jnp.split(phys_func(x), 2, axis=1)
+            mu, log_sigma = jnp.split(phys_func(phys), 2, axis=1)
             phys_stats.append((mu, log_sigma))
 
         return phys_stats, aux_stats, phys
@@ -474,8 +474,8 @@ class PhysDecoder(nnx.Module):
             The statistics for the series with the mean and log variance stacked in the first axis
         """
 
-        def ODE(t: RealScalarLike, y: PyTree, _args: PyTree):
-            """Internal ODE to be solved during the generation process."""
+        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
+            """Internal PDE to be solved during the generation process."""
             # y : (B, L*D)
             assert len(y.shape) == 2, f"expected (B, L*D) but received {y.shape}"
             assert y.shape[1] == self.ode_dim, (
@@ -512,7 +512,7 @@ class PhysDecoder(nnx.Module):
         init_cond = jnp.pad(init_y, ((0, 0), (0, self.ode_dim - self.num_grid_points)))
 
         y_seq = diffeqsolve(
-            ODETerm(ODE),
+            ODETerm(PDE),
             self.solver(),
             t0=0.0,
             t1=self.t1,

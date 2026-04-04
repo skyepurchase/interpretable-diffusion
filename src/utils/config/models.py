@@ -1,3 +1,5 @@
+from dataclasses import field
+
 from pydantic.dataclasses import dataclass
 
 from .modules import ModuleConfig
@@ -75,3 +77,7 @@ class DDIMConfig:
     beta_schedule: str
     beta_start: float
     beta_end: float
+    pad: list[tuple] = field(default_factory=lambda: [(0, 0), (0, 0)])
+
+
+PAIDConfig = DDIMConfig
