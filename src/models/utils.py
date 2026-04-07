@@ -7,9 +7,10 @@ import orbax.checkpoint as ocp
 from flax import nnx
 from flax.nnx import Rngs
 
-from models.phys_ddim import PAID
+from models.paid import PAID
 from models.phys_vae import PhysVAE
 from models.train_ddim import train_step as ddim_step
+from models.train_paid import train_step as paid_step
 from models.train_phys_vae import train_step as phys_vae_step
 from models.train_vae import train_step as vae_step
 from utils.config.models import DDIMConfig, PAIDConfig, PhysVAEConfig, VAEConfig
@@ -29,7 +30,7 @@ TRAIN_STEPPER: dict[str, TrainStep] = {
     "ddim": ddim_step,
     "vae": vae_step,
     "phys_vae": phys_vae_step,
-    "paid": ddim_step,
+    "paid": paid_step,
 }
 
 LOSS_LABELS: dict[str, list[str]] = {

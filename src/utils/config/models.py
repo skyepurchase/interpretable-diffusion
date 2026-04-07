@@ -1,4 +1,5 @@
 from dataclasses import field
+from typing import Optional
 
 from pydantic.dataclasses import dataclass
 
@@ -63,7 +64,7 @@ class VAEConfig:
 
 
 @dataclass
-class DDIMConfig:
+class DDIMBase:
     in_features: int
     base_features: int
     feature_multiples: tuple[int, ...]
@@ -77,7 +78,25 @@ class DDIMConfig:
     beta_schedule: str
     beta_start: float
     beta_end: float
+
+
+@dataclass
+class DDIMConfig(DDIMBase):
     pad: list[tuple] = field(default_factory=lambda: [(0, 0), (0, 0)])
 
 
-PAIDConfig = DDIMConfig
+@dataclass
+class PhysBlock:
+    latent_dim: int
+    in_features: int
+    features: int
+    act: str
+    dropout: bool
+    dropout_rate: float
+    time_dim: Optional[int] = None
+
+
+@dataclass
+class PAIDConfig(DDIMBase):
+    aux_funcs: list[PhysBlock]
+    pad: list[tuple] = field(default_factory=lambda: [(0, 0), (0, 0)])

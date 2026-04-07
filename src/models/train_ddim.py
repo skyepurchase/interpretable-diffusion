@@ -5,7 +5,7 @@ from flax import nnx
 from jax.random import split
 
 from models.ddim import DDIM
-from models.phys_ddim import PAID
+from models.paid import PAID
 
 
 def noise_estimation_loss(
@@ -58,7 +58,7 @@ def train_step(
     losses : Array
         Loss data to be logged
     """
-    if not isinstance(model, DDIM) and not isinstance(model, PAID):
+    if not isinstance(model, DDIM):
         raise TypeError(f"Expected model type to be DDIM not {type(model)}")
 
     if len(data.shape) < 4:
