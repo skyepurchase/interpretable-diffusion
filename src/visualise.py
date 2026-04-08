@@ -11,7 +11,7 @@ from datasets import get_dataset
 from models import load_model
 from utils.config import ExperimentConfig, VisualiserConfig, load_config
 from utils.config.datasets import get_full_dataset_name
-from visualisers.ddim import generate_images
+from visualisers.ddim import generate_mnist, generate_timeseries
 from visualisers.vae import (
     reconstruct_1D_series,
     reconstruct_images,
@@ -24,10 +24,13 @@ NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 VISUALISER = {
     "mnist": {
         "vae": reconstruct_images,
-        "ddim": generate_images,
+        "ddim": generate_mnist,
     },
     "pivae-pendulum": {"phys_vae": reconstruct_point_series},
-    "pivae-diffusion": {"phys_vae": reconstruct_1D_series},
+    "pivae-diffusion": {
+        "phys_vae": reconstruct_1D_series,
+        "paid": generate_timeseries,
+    },
 }
 
 

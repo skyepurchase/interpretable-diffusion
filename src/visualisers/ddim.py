@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from flax import nnx
 
 from models.ddim import DDIM
+from models.paid import PAID
 
 Carry = tuple[nnx.Module, jax.Array, jax.Array]
 
@@ -50,11 +51,11 @@ def generate_images(
     model: nnx.Module, array_like: jax.Array, key: jax.Array
 ) -> jax.Array:
     """
-    Given a trained DDIM model and array who's shape is to be produced generate images.
+    Given a trained DDIM style model and array with target shape generate images.
 
     Parameters
     ----------
-    model : DDIM
+    model : DDIM | PAID
         The trained DDIM model
     array_like : jax.Array
         Array who's shape is matched
@@ -65,11 +66,14 @@ def generate_images(
     images : jax.Array
         The generated images with shape like array_like
     """
-    if not isinstance(model, DDIM):
+    if not isinstance(model, DDIM) and not isinstance(model, PAID):
         raise TypeError(f"Expected model to be DDIM but received {type(model)}")
 
     model.eval()
 
+    if len(array_like.shape) < 4:
+        array_like = jnp.expand_dims(array_like, axis=3)
+    array_like = jnp.pad(array_like, ((0, 0), model.pad[0], model.pad[1], (0, 0)))
     img_shape = array_like.shape[1:]
     n_samples = array_like.shape[0]
 
@@ -82,4 +86,28 @@ def generate_images(
     gen_step = make_step(n_samples, img_shape)
     _, images = jax.lax.scan(gen_step, init, values)
 
-    return jnp.clip(images[-1], 0, 1)
+    sample = images[-1]
+    if sum(model.pad[0]) > 0:
+        sample = sample[:, model.pad[0][0] : -model.pad[0][1]]
+    if sum(model.pad[1]) > 0:
+        sample = sample[:, :, model.pad[1][0] : -model.pad[1][1]]
+
+    return sample
+
+
+def generate_mnist(
+    model: nnx.Module, array_like: jax.Array, key: jax.Array
+) -> jax.Array:
+    """
+    Wrapper for generating images that clips the output to be in the range 0 and 1.
+    """
+    return jnp.clip(generate_images(model, array_like, key), 0, 1)
+
+
+def generate_timeseries(
+    model: nnx.Module, array_like: jax.Array, key: jax.Array
+) -> jax.Array:
+    """
+    Wrapper for generating images that are permuted for the correct time and x axes.
+    """
+    return jnp.permute_dims(generate_images(model, array_like, key), (0, 2, 1, 3))
