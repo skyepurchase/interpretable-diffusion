@@ -14,12 +14,20 @@ def noise_estimation_loss(
     t: jax.Array,
     noise: jax.Array,
     betas: jax.Array,
+    condition: int = 0,
 ) -> jax.Array:
     """
-    This implementation matches that in the original DDIM paper https://github.com/ermongroup/ddim/blob/main/functions/losses.py.
+    TODO: Meaningful docstring
     """
+    assert condition >= 0, "Condition period must be non-negative"
+    # TODO: add more flexibility
+    assert condition < data.shape[1], (
+        f"Condition period must be less the width of the data, {condition} >= {data.shape[1]}"
+    )
+
     alpha = (1 - betas).cumprod(axis=0)[t].reshape(-1, 1, 1, 1)
-    x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
+    noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
+    x = jnp.concatenate([data[:, :condition], noisy_x[:, condition:]], axis=1)
     output = model(jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), t)
 
     if sum(model.pad[0]) > 0:
@@ -30,7 +38,7 @@ def noise_estimation_loss(
 
     assert output.shape == noise.shape
 
-    return jnp.square(noise - output).sum(axis=(1, 2, 3)).mean(axis=0)
+    return jnp.square((noise - output)[:, condition:]).sum(axis=(1, 2, 3)).mean(axis=0)
 
 
 @nnx.jit

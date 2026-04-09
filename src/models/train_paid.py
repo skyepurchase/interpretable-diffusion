@@ -51,7 +51,7 @@ def train_step(
     t = jnp.concatenate([t, model.num_timesteps - t - 1], axis=0)[:batch_size]
 
     loss, grads = nnx.value_and_grad(noise_estimation_loss)(
-        model, data, t, noise, betas
+        model, data, t, noise, betas, 1
     )
     optimizer.update(model, grads)
 

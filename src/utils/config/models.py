@@ -64,7 +64,7 @@ class VAEConfig:
 
 
 @dataclass
-class DDIMBase:
+class UNetConfig:
     in_features: int
     base_features: int
     feature_multiples: tuple[int, ...]
@@ -74,14 +74,14 @@ class DDIMBase:
     act: str
     dropout: bool
     dropout_rate: float
+
+
+@dataclass
+class DDIMConfig(UNetConfig):
     num_timesteps: int
     beta_schedule: str
     beta_start: float
     beta_end: float
-
-
-@dataclass
-class DDIMConfig(DDIMBase):
     pad: list[tuple] = field(default_factory=lambda: [(0, 0), (0, 0)])
 
 
@@ -97,6 +97,23 @@ class PhysBlock:
 
 
 @dataclass
-class PAIDConfig(DDIMBase):
+class PDEConfig:
+    system: str
+    time_dim: int
+    timestep: float
+    solver: str
+    integral_level: int
+    length: float = 0.0
+    num_grid_points: int = 1
+
+
+@dataclass
+class PAIDConfig:
+    unet: UNetConfig
+    pde: PDEConfig
     aux_funcs: list[PhysBlock]
+    num_timesteps: int
+    beta_schedule: str
+    beta_start: float
+    beta_end: float
     pad: list[tuple] = field(default_factory=lambda: [(0, 0), (0, 0)])
