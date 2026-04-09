@@ -1,8 +1,10 @@
+from functools import reduce
+
 import jax
 import jax.numpy as jnp
 from diffrax import ODETerm, SaveAt, diffeqsolve
 from diffrax._custom_types import RealScalarLike
-from diffuse.neural_network.blocks import ResnetBlock
+from diffuse.neural_network.blocks import Downsample, ResnetBlock
 from diffuse.neural_network.nn import CondUNet2D
 from flax import nnx
 from jaxtyping import PyTree
@@ -14,8 +16,12 @@ from utils.config.models import PAIDConfig
 
 
 class PhysUNet2D(nnx.Module):
-    def __init__(self, cfg: PAIDConfig, rngs: nnx.Rngs):
+    """TODO: Add docstring"""
+
+    def __init__(self, cfg: PAIDConfig, pad: list[tuple[int, int]], rngs: nnx.Rngs):
         # Constants
+        self.pad = pad
+
         # PDE solver constants
         self.integral_level = cfg.pde.integral_level
         self.integral_len = (cfg.pde.time_dim - 1) * self.integral_level + 1
@@ -24,7 +30,7 @@ class PhysUNet2D(nnx.Module):
             0.0, self.integral_step * (self.integral_len - 1), self.integral_len
         )
 
-        self.t1 = self.integral_level
+        self.t1 = self.integral_len
         self.dt = self.integral_step
         self.num_grid_points = cfg.pde.num_grid_points
         self.pde_dim = self.num_grid_points * NUM_DERIVATIVES.get(cfg.pde.system, 1)
@@ -87,17 +93,114 @@ class PhysUNet2D(nnx.Module):
             aux_dims.append(aux_cfg.latent_dim)
 
         # Physics parameter estimators
-        self.unmixer = nnx.Sequential(nnx.identity)
+        latent_dims = reduce(lambda x, y: x + y, aux_dims)
+        self.unmixer_conv = nnx.Conv(
+            in_features=latent_dims + 1,
+            out_features=cfg.unmixer.dims[0],
+            kernel_size=(3, 3),
+            strides=(1, 1),
+            padding=(1, 1),
+            rngs=rngs,
+        )
+        self.unmixer = nnx.List([])
+        for in_features, out_features in zip(
+            cfg.unmixer.dims[:-1], cfg.unmixer.dims[1:]
+        ):
+            self.unmixer.append(
+                ResnetBlock(
+                    in_channels=in_features,
+                    out_channels=out_features,
+                    activation=ACTS[cfg.unmixer.act],
+                    embedding_dim=cfg.unmixer.time_dim,
+                    dropout=cfg.unmixer.dropout,
+                    dropout_rate=cfg.unmixer.dropout_rate,
+                    rngs=rngs,
+                )
+            )
+            in_features = out_features
+        self.unmixer.append(
+            nnx.Conv(
+                in_features=cfg.unmixer.dims[-1],
+                out_features=1,
+                kernel_size=(3, 3),
+                strides=(1, 1),
+                padding=(1, 1),
+                rngs=rngs,
+            )
+        )
+
+        self.phys_features_conv = nnx.Conv(
+            in_features=1,
+            out_features=cfg.unet.base_features,
+            kernel_size=(3, 3),
+            strides=(1, 1),
+            padding=(1, 1),
+            rngs=rngs,
+        )
+        self.phys_feature_extract = nnx.List([])
+        curr_features = cfg.unet.base_features
+        for level, mult in enumerate(cfg.unet.feature_multiples):
+            for _ in range(cfg.unet.num_blocks):
+                self.phys_feature_extract.append(
+                    ResnetBlock(
+                        in_channels=curr_features,
+                        out_channels=int(mult * cfg.unet.base_features),
+                        activation=ACTS[cfg.unet.act],
+                        dropout=cfg.unet.dropout,
+                        dropout_rate=cfg.unet.dropout_rate,
+                        rngs=rngs,
+                    )
+                )
+
+                curr_features = int(mult * cfg.unet.base_features)
+
+            if level != len(cfg.unet.feature_multiples) - 1:
+                self.phys_feature_extract.append(
+                    Downsample(in_channels=curr_features, rngs=rngs)
+                )
+
         self.phys_funcs = nnx.List()
+        assert len(cfg.phys_funcs) == len(cfg.pde.phys_param_ranges), (
+            f"Number of physic latent functions and parameter ranges must match, {len(cfg.phys_funcs)} != {len(cfg.pde.phys_param_ranges)}."
+        )
+        for phys_cfg, param_range in zip(cfg.phys_funcs, cfg.pde.phys_param_ranges):
+            phys_func = nnx.Sequential(
+                ResnetBlock(
+                    curr_features,
+                    phys_cfg.features,
+                    ACTS[phys_cfg.act],
+                    embedding_dim=phys_cfg.time_dim,
+                    dropout=phys_cfg.dropout,
+                    dropout_rate=phys_cfg.dropout_rate,
+                    rngs=rngs,
+                ),
+                ACTS[phys_cfg.act],
+                lambda x: x.reshape(x.shape[0], -1),
+                nnx.Linear(phys_cfg.in_features, phys_cfg.latent_dim, rngs=rngs),
+                nnx.sigmoid,
+                lambda x: x
+                * ((2 * param_range[1]) - (param_range[0] / 2) + (param_range[0] / 2)),
+            )
+            self.phys_funcs.append(phys_func)
 
         # Perturbations
         self.post_funcs = nnx.List()
 
-    def forward(self, x: jax.Array, t: jax.Array) -> jax.Array:
+        # TODO: REMOVE
+        self.conv_merge = nnx.Conv(
+            in_features=cfg.unet.base_features + 1,
+            out_features=cfg.unet.base_features,
+            kernel_size=(3, 3),
+            strides=(1, 1),
+            padding=(1, 1),
+            rngs=rngs,
+        )
+
+    def forward(self, x: jax.Array, tau: jax.Array) -> jax.Array:
         # x : (B, T, X, 1)
         h = x
 
-        t_emb = self.unet.time_proj(t)
+        t_emb = self.unet.time_proj(tau)
         t_emb = self.unet.time_embedding(t_emb)
 
         hs = []
@@ -117,13 +220,19 @@ class PhysUNet2D(nnx.Module):
                 )
             )
 
-        # phys : (B, T, X, 1 + z*n)
-        phys = self.unmixer(jnp.concatenate([x] + aux_latents, axis=3))
+        # phys : (B, T, X, 1)
+        phys = self.unmixer_conv(jnp.concatenate([x] + aux_latents, axis=3))
+        for layer in self.unmixer:
+            phys = layer(phys)
+
+        phys_features = self.phys_features_conv(phys)
+        for layer in self.phys_feature_extract:
+            phys_features = layer(phys_features)
 
         # phys_latent : (B, Z)
         phys_latents = []
         for phys_func in self.phys_funcs:
-            phys_latents.append(phys_func(phys))
+            phys_latents.append(phys_func(phys_features))
 
         # h : (B, T, X, 32)
         for block in self.unet.blocks_up:
@@ -139,7 +248,7 @@ class PhysUNet2D(nnx.Module):
             )
 
             # y_dot_phys : (B, X*D)
-            y_dot_phys = self.physics_model(y, 0.05)
+            y_dot_phys = self.physics_model(y, *phys_latents)
 
             # TODO: Implement auxiliary perturbation
             # y_dot_aux : (B, X*D)
@@ -150,7 +259,8 @@ class PhysUNet2D(nnx.Module):
 
         # init_cond : (B, X*D)
         init_cond = jnp.pad(
-            x[:, 0, :, 0], ((0, 0), (0, self.pde_dim - self.num_grid_points))
+            x[:, self.pad[0][0], :, 0],
+            ((0, 0), (0, self.pde_dim - self.num_grid_points)),
         )
 
         # y_seq : (S, B, X*D)
@@ -170,13 +280,16 @@ class PhysUNet2D(nnx.Module):
 
         # phys_h : (B, T, X, 1)
         phys_h = jnp.expand_dims(
-            jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 2, 0)),
+            # (T, B, X)
+            jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
             axis=3,
         )
+        phys_h = jnp.pad(phys_h, [(0, 0), self.pad[0], self.pad[1], (0, 0)])
 
         for z_aux, post_func in zip(aux_latents, self.post_funcs):
             h = post_func(jnp.concatenate([h, phys_h, z_aux], axis=3))
 
+        h = self.conv_merge(jnp.concatenate([h, phys_h], axis=3))
         # out : (B, T, X, 1)
         return self.unet.out(h)
 
@@ -196,7 +309,7 @@ class PAID(nnx.Module):
             cfg.beta_schedule, cfg.beta_start, cfg.beta_end, self.num_timesteps
         )
 
-        self.denoiser = PhysUNet2D(cfg, rngs)
+        self.denoiser = PhysUNet2D(cfg, cfg.pad, rngs)
 
         self.pad = cfg.pad
 

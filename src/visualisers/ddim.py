@@ -7,7 +7,7 @@ from flax import nnx
 from models.ddim import DDIM
 from models.paid import PAID
 
-Carry = tuple[nnx.Module, jax.Array, jax.Array]
+Carry = tuple[DDIM | PAID, jax.Array, jax.Array]
 
 
 def make_step(
@@ -37,9 +37,6 @@ def make_step(
         model, prev, key = carry
         alpha_raw, step = jnp.split(value, 2, axis=0)
 
-        assert isinstance(model, DDIM) or isinstance(model, PAID), (
-            f"Only denoising diffusion models accepted, received {type(model)}."
-        )
         assert condition < prev.shape[1], (
             f"Condition period must be shorter than provided data, {condition} >= {prev.shape[1]}"
         )

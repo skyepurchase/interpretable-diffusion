@@ -97,8 +97,18 @@ class PhysBlock:
 
 
 @dataclass
+class UnmixerBlock:
+    dims: list[int]
+    act: str
+    dropout: bool
+    dropout_rate: float
+    time_dim: Optional[int] = None
+
+
+@dataclass
 class PDEConfig:
     system: str
+    phys_param_ranges: list[tuple[float, float]]
     time_dim: int
     timestep: float
     solver: str
@@ -112,6 +122,8 @@ class PAIDConfig:
     unet: UNetConfig
     pde: PDEConfig
     aux_funcs: list[PhysBlock]
+    unmixer: UnmixerBlock
+    phys_funcs: list[PhysBlock]
     num_timesteps: int
     beta_schedule: str
     beta_start: float

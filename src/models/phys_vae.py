@@ -506,7 +506,7 @@ class PhysDecoder(nnx.Module):
                 )
 
             # ys_dot : (B, L*D)
-            return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.ode_dim))
+            return ys_dot_phys + ys_dot_aux
 
         # init_cond : (B, L*D)
         init_cond = jnp.pad(init_y, ((0, 0), (0, self.ode_dim - self.num_grid_points)))
