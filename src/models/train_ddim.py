@@ -6,6 +6,7 @@ from jax.random import split
 
 from models.ddim import DDIM
 from models.paid import PAID
+from models.utils import remove_padding
 
 
 def noise_estimation_loss(
@@ -18,6 +19,11 @@ def noise_estimation_loss(
 ) -> jax.Array:
     """
     TODO: Meaningful docstring
+
+    Returns
+    -------
+    loss : Array ()
+        The noise estimation loss
     """
     assert condition >= 0, "Condition period must be non-negative"
     # TODO: add more flexibility
@@ -28,17 +34,14 @@ def noise_estimation_loss(
     alpha = (1 - betas).cumprod(axis=0)[t].reshape(-1, 1, 1, 1)
     noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
     x = jnp.concatenate([data[:, :condition], noisy_x[:, condition:]], axis=1)
-    output = model(jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), t)
+    eps = model(jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), t)
+    eps = remove_padding(eps, model.pad)
 
-    if sum(model.pad[0]) > 0:
-        output = output[:, model.pad[0][0] : -model.pad[0][1], :, :]
+    assert eps.shape == noise.shape, (
+        f"Noise and estimation must be same shape, {eps.shape} != {noise.shape}."
+    )
 
-    if sum(model.pad[1]) > 0:
-        output = output[:, :, model.pad[1][0] : -model.pad[1][1], :]
-
-    assert output.shape == noise.shape
-
-    return jnp.square((noise - output)[:, condition:]).sum(axis=(1, 2, 3)).mean(axis=0)
+    return jnp.square((noise - eps)[:, condition:]).sum(axis=(1, 2, 3)).mean(axis=0)
 
 
 @nnx.jit

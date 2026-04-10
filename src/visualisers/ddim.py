@@ -6,6 +6,7 @@ from flax import nnx
 
 from models.ddim import DDIM
 from models.paid import PAID
+from models.utils import remove_padding
 
 Carry = tuple[DDIM | PAID, jax.Array, jax.Array]
 
@@ -52,14 +53,10 @@ def make_step(
             jnp.pad(x, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
             step * jnp.ones(n_samples),
         )
+        eps = remove_padding(eps, model.pad)
 
-        if sum(model.pad[0]) > 0:
-            eps = eps[:, model.pad[0][0] : -model.pad[0][1]]
-        if sum(model.pad[1]) > 0:
-            eps = eps[:, :, model.pad[1][0] : -model.pad[1][1]]
-
-        noisy_curr = (x - eps * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
-        curr = jnp.concatenate([prev[:, :condition], noisy_curr[:, condition:]], axis=1)
+        denoised = (x - eps * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
+        curr = jnp.concatenate([prev[:, :condition], denoised[:, condition:]], axis=1)
 
         return (model, curr, key), curr
 
