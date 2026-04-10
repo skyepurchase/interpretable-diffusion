@@ -44,7 +44,11 @@ LOSS_LABELS: dict[str, list[str]] = {
         "physics",
         "augmentation",
     ],
-    "paid": ["loss"],
+    "paid": [
+        "loss",
+        "estimation",
+        "physics",
+    ],
 }
 
 

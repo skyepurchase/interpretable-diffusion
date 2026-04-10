@@ -197,6 +197,14 @@ class PhysUNet2D(nnx.Module):
         )
 
     def forward(self, x: jax.Array, tau: jax.Array) -> jax.Array:
+        """
+        TODO: Add docstring
+
+        Returns
+        -------
+        eps : Array (B, W, H, C) padded
+            Estimation of the noise added to x
+        """
         # x : (B, T, X, 1)
         h = x
 
@@ -221,11 +229,11 @@ class PhysUNet2D(nnx.Module):
             )
 
         # phys : (B, T, X, 1)
-        phys = self.unmixer_conv(jnp.concatenate([x] + aux_latents, axis=3))
+        phys_sig = self.unmixer_conv(jnp.concatenate([x] + aux_latents, axis=3))
         for layer in self.unmixer:
-            phys = layer(phys)
+            phys_sig = layer(phys_sig)
 
-        phys_features = self.phys_features_conv(phys)
+        phys_features = self.phys_features_conv(phys_sig)
         for layer in self.phys_feature_extract:
             phys_features = layer(phys_features)
 
@@ -279,23 +287,130 @@ class PhysUNet2D(nnx.Module):
         trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
 
         # phys_h : (B, T, X, 1)
-        phys_h = jnp.expand_dims(
+        gen_phys = jnp.expand_dims(
             # (T, B, X)
             jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
             axis=3,
         )
-        phys_h = jnp.pad(phys_h, [(0, 0), self.pad[0], self.pad[1], (0, 0)])
+        gen_phys = jnp.pad(gen_phys, [(0, 0), self.pad[0], self.pad[1], (0, 0)])
 
         for z_aux, post_func in zip(aux_latents, self.post_funcs):
-            h = post_func(jnp.concatenate([h, phys_h, z_aux], axis=3))
+            h = post_func(jnp.concatenate([h, gen_phys, z_aux], axis=3))
 
-        h = self.conv_merge(jnp.concatenate([h, phys_h], axis=3))
+        h = self.conv_merge(jnp.concatenate([h, gen_phys], axis=3))
         # out : (B, T, X, 1)
         return self.unet.out(h)
 
-    def full_forward(self, x: jax.Array, t: jax.Array) -> jax.Array:
-        # TODO: Implement
-        raise NotImplementedError
+    def full_forward(
+        self, x: jax.Array, tau: jax.Array
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """
+        TODO: Add docstring
+
+        Returns
+        -------
+        eps : Array (B, W, H, C) padded
+            Estimation of the noise added to x
+        phys_sig : Array (B, W, H, C) padded
+            Estimation of the known physics signal
+        gen_phys : Array (B, W, H, C) padded
+            Solved physics
+        """
+        # x : (B, T, X, 1)
+        h = x
+
+        t_emb = self.unet.time_proj(tau)
+        t_emb = self.unet.time_embedding(t_emb)
+
+        hs = []
+        for block in self.unet.blocks_down:
+            h = block(h, t_emb)
+            hs.append(h)
+
+        h = self.unet.block_mid(h, t_emb)
+
+        # aux_latent : (B, Z)
+        aux_latents = []
+        for aux_func in self.aux_funcs:
+            aux_latents.append(
+                jnp.tile(
+                    jnp.expand_dims(aux_func(h), axis=[1, 2]),
+                    [1, x.shape[1], x.shape[2], 1],
+                )
+            )
+
+        # phys : (B, T, X, 1)
+        phys_sig = self.unmixer_conv(jnp.concatenate([x] + aux_latents, axis=3))
+        for layer in self.unmixer:
+            phys_sig = layer(phys_sig)
+
+        phys_features = self.phys_features_conv(phys_sig)
+        for layer in self.phys_feature_extract:
+            phys_features = layer(phys_features)
+
+        # phys_latent : (B, Z)
+        phys_latents = []
+        for phys_func in self.phys_funcs:
+            phys_latents.append(phys_func(phys_features))
+
+        # h : (B, T, X, 32)
+        for block in self.unet.blocks_up:
+            h = jnp.concatenate([h, hs.pop()], axis=-1)
+            h = block(h, t_emb)
+
+        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
+            """Internal PDE to be solved during the generation process."""
+            # y : (B, X*D)
+            assert len(y.shape) == 2, f"expected (B, X*D) but received {y.shape}"
+            assert y.shape[1] == self.pde_dim, (
+                f"Expected (B, {self.pde_dim}) but received {y.shape}"
+            )
+
+            # y_dot_phys : (B, X*D)
+            y_dot_phys = self.physics_model(y, *phys_latents)
+
+            # TODO: Implement auxiliary perturbation
+            # y_dot_aux : (B, X*D)
+            y_dot_aux = jnp.zeros_like(y_dot_phys)
+
+            # ys_dot: (B, X*D)
+            return y_dot_phys + y_dot_aux
+
+        # init_cond : (B, X*D)
+        init_cond = jnp.pad(
+            x[:, self.pad[0][0], :, 0],
+            ((0, 0), (0, self.pde_dim - self.num_grid_points)),
+        )
+
+        # y_seq : (S, B, X*D)
+        y_seq = diffeqsolve(
+            ODETerm(PDE),
+            self.solver(),
+            t0=0.0,
+            t1=self.t1,
+            dt0=self.dt,
+            y0=init_cond,
+            saveat=SaveAt(ts=self.t_span),
+        ).ys
+        assert y_seq is not None, "Failed to solve PDE"
+
+        # trim_y_seq : (T, B, X*D)
+        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
+
+        # phys_h : (B, T, X, 1)
+        gen_phys = jnp.expand_dims(
+            # (T, B, X)
+            jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
+            axis=3,
+        )
+        gen_phys = jnp.pad(gen_phys, [(0, 0), self.pad[0], self.pad[1], (0, 0)])
+
+        for z_aux, post_func in zip(aux_latents, self.post_funcs):
+            h = post_func(jnp.concatenate([h, gen_phys, z_aux], axis=3))
+
+        h = self.conv_merge(jnp.concatenate([h, gen_phys], axis=3))
+        # out : (B, T, X, 1)
+        return self.unet.out(h), phys_sig, gen_phys
 
 
 class PAID(nnx.Module):
