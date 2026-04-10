@@ -26,8 +26,8 @@ def remove_padding(a: Array, padding: list[tuple[int, int]]):
 
     for dim in range(1, len(a.shape) - 2):
         length = a.shape[dim]
-        left_pad = padding[dim][0]
-        right_pad = padding[dim][1]
+        left_pad = padding[dim - 1][0]
+        right_pad = padding[dim - 1][1]
 
         assert length > left_pad + right_pad, (
             f"Unable to remove padding from axis {dim}, {length} <= {left_pad} + {right_pad}."
