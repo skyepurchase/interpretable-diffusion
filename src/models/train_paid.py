@@ -153,22 +153,24 @@ def loss_fn(
     phys = remove_padding(phys, model.pad)
     x_hat = remove_padding(x_hat, [(0, 0)] + model.pad)
 
-    estimation_loss = (
+    reconstruction_loss = (
         jnp.square((data - x_hat[-1])[:, condition:]).sum(axis=(1, 2, 3)).mean()
     )
-    phys_loss = (
+    phys_loss = model.beta * (
         jnp.square(phys_hat - jax.lax.stop_gradient(phys)).sum(axis=(1, 2, 3)).mean()
     )
 
-    disc_loss = discrepancy_loss(x_hat)
+    disc_loss = model.alpha * discrepancy_loss(x_hat)
 
     key, aug_key = jax.random.split(key, 2)
-    aug_loss = augmentation_loss(model, phys_params, data[:, 0, :, 0], tau, key=aug_key)
+    aug_loss = model.gamma * augmentation_loss(
+        model, phys_params, data[:, 0, :, 0], tau, key=aug_key
+    )
 
-    full_loss = estimation_loss + phys_loss + disc_loss + aug_loss
+    full_loss = reconstruction_loss + phys_loss + disc_loss + aug_loss
 
     return full_loss, jnp.stack(
-        [full_loss, estimation_loss, phys_loss, disc_loss, aug_loss]
+        [full_loss, reconstruction_loss, phys_loss, disc_loss, aug_loss]
     )
 
 

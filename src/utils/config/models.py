@@ -121,13 +121,20 @@ class PDEConfig:
 class PAIDConfig:
     unet: UNetConfig
     pde: PDEConfig
+
     aux_funcs: list[PhysBlock]
     unmixer: UnmixerBlock
     phys_funcs: list[PhysBlock]
     pre_funcs: list[PhysFunc]
     post_funcs: list[PhysBlock]
+
     num_timesteps: int
     beta_schedule: str
     beta_start: float
     beta_end: float
+
+    alpha: float
+    beta: float
+    gamma: float
+
     pad: list[tuple] = field(default_factory=lambda: [(0, 0), (0, 0)])

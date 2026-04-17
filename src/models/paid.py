@@ -540,6 +540,11 @@ class PAID(nnx.Module):
             cfg.beta_schedule, cfg.beta_start, cfg.beta_end, self.num_timesteps
         )
 
+        # Training constants
+        self.alpha = cfg.alpha
+        self.beta = cfg.beta
+        self.gamma = cfg.gamma
+
         # Physics constants + functions
         self.integral_level = cfg.pde.integral_level
         self.integral_len = (cfg.pde.time_dim - 1) * self.integral_level + 1
