@@ -5,7 +5,42 @@ from flax import nnx
 from jax.random import split
 
 from models.paid import PAID
+from models.phys_vae import gen_mask
 from models.utils import remove_padding
+
+
+def discrepancy_loss(x_hats: jax.Array) -> jax.Array:
+    """
+    TODO: create docstring
+
+    Parameters
+    ----------
+    x_hats : Array (m, B, W, H, C)
+        The estimated clean sample with different auxiliary functions
+
+    Returns
+    -------
+    loss : Array ()
+        The discrepancy loss
+    """
+    mask = gen_mask(x_hats.shape[0])
+
+    # discrepancies : (m - 1, m - 1, B)
+    discrepancies = jax.vmap(
+        # x : (B, W, H, C)
+        lambda x: jax.vmap(
+            # y : (B, W, H, C)
+            lambda y: jnp.square(x - y).sum((1, 2, 3)),
+            in_axes=0,
+            out_axes=0,
+        )(x_hats[:-1]),
+        in_axes=0,
+        out_axes=0,
+    )(x_hats[1:])
+
+    masked_disc = discrepancies.mean(axis=2) * mask
+
+    return masked_disc.sum() / mask.sum()
 
 
 def loss_fn(
@@ -60,9 +95,11 @@ def loss_fn(
         jnp.square(phys_hat - jax.lax.stop_gradient(phys)).sum(axis=(1, 2, 3)).mean()
     )
 
-    full_loss = estimation_loss + phys_loss
+    disc_loss = discrepancy_loss(x_hat)
 
-    return full_loss, jnp.stack([full_loss, estimation_loss, phys_loss])
+    full_loss = estimation_loss + phys_loss + disc_loss
+
+    return full_loss, jnp.stack([full_loss, estimation_loss, phys_loss, disc_loss])
 
 
 @nnx.jit

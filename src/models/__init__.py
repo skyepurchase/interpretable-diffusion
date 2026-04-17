@@ -48,6 +48,7 @@ LOSS_LABELS: dict[str, list[str]] = {
         "loss",
         "reconstruction",
         "physics",
+        "discrepancy",
     ],
 }
 
