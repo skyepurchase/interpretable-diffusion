@@ -1,4 +1,5 @@
 from functools import reduce
+from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -288,6 +289,171 @@ class PhysUNet2D(nnx.Module):
 
         return h, aux_latents, phys_params, phys_sig
 
+    def _generate(
+        self,
+        x: jax.Array,
+        x_hat: jax.Array,
+        aux_latents: list[jax.Array],
+        phys_params: list[jax.Array],
+        pre_combs: int = 1,
+        post_combs: int = 1,
+        pre_selections: Optional[jax.Array] = None,
+        post_selections: Optional[jax.Array] = None,
+    ) -> jax.Array:
+        """
+        TODO: write meaningful docstring
+
+        Parameters
+        ----------
+        x : Array (B, W, H, C) padded
+            The input noisy sample
+        x_hat : Array (B, W, H, C) padded
+            Clean estimate without physics information
+        aux_latents : Array (B, Z)
+            The auxiliary latents
+        phys_params : Array (B, Z)
+            The estimated physics parameters
+        pre_combs : int = 1
+            The number of pre-ODE function combinations
+        post_combs : int = 1
+            The number of post-ODE function combinations
+        pre_selections : Array (num_pre_funcs, pre_combs)
+            A binary array of which combinations to apply a function.
+        post_selections : Array (num_post_funcs, pre_combs * post_combs)
+            A binary array of which combinations to apply a function.
+
+        Returns
+        -------
+        phys_x_hat : Array (m, B, W, H, C)
+            The estimated clean sample incorporating physics knowledge
+        """
+
+        if pre_selections is None or post_selections is None:
+            assert pre_combs == 1 and post_combs == 1, (
+                f"If selections are not specified combinations must be 1, {pre_combs} != 1 or {post_combs} != 1."
+            )
+
+            pre_selections = jnp.ones((len(self.pre_funcs), 1))
+            post_selections = jnp.ones((len(self.pre_funcs), 1))
+        else:
+            assert (
+                pre_selections.shape == (len(self.pre_funcs), pre_combs)
+                or len(self.pre_funcs) == 0
+            ), (
+                f"Shape of pre_selections must match number of pre-ODE functions and pre_combinations, {pre_selections.shape} != {(len(self.pre_funcs), pre_combs)} and {len(self.pre_funcs)} != 0."
+            )
+            assert (
+                post_selections.shape == (len(self.post_funcs), pre_combs * post_combs)
+                or len(self.post_funcs) == 0
+            ), (
+                f"Shape of post_selections must match number of post-ODE functions and post_combinations, {post_selections.shape} != {(len(self.post_funcs), pre_combs * post_combs)} and {len(self.pre_funcs)} != 0."
+            )
+
+        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
+            """Internal PDE to be solved during the generation process."""
+            # y : (B*n, X*D)
+            assert len(y.shape) == 2, f"expected (B, X*D) but received {y.shape}"
+            assert y.shape[1] == self.pde_dim, (
+                f"Expected (B, {self.pde_dim}) but received {y.shape}"
+            )
+
+            ys = y.reshape(pre_combs, -1, self.pde_dim)
+
+            # y_dot_phys : (n, B, X*D)
+            ys_dot_phys = jax.vmap(self.physics_model, in_axes=(0, None), out_axes=0)(
+                ys, *phys_params
+            )
+
+            # ys_dot_aux : (n, B, X*D)
+            ys_dot_aux = jnp.zeros_like(ys_dot_phys)
+            for z_aux, pre_func, selections in zip(
+                aux_latents, self.pre_funcs, pre_selections
+            ):
+                # y : (B, D), apply : (1)
+                def apply_func(y, apply):
+                    return apply * jnp.pad(
+                        pre_func(
+                            jnp.concatenate(
+                                [z_aux, y, jnp.ones_like(y)[:, 0, None] * t], axis=-1
+                            )
+                        ),
+                        ((0, 0), (self.pde_dim - self.num_grid_points, 0)),
+                    )
+
+                ys_dot_aux += jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
+                    ys, selections
+                )
+
+            # ys_dot: (B*n, X*D)
+            return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.pde_dim))
+
+        # init_cond : ^(B*n, X*D)
+        init_cond = jnp.tile(
+            jnp.pad(
+                remove_padding(x, self.pad)[:, 0, :, 0],
+                ((0, 0), (0, self.pde_dim - self.num_grid_points)),
+            ),
+            reps=(pre_combs, 1),
+        )
+
+        # y_seq : ^(S, B*n, X*D)
+        y_seq = diffeqsolve(
+            ODETerm(PDE),
+            self.solver(),
+            t0=0.0,
+            t1=self.t1,
+            dt0=self.dt,
+            y0=init_cond,
+            saveat=SaveAt(ts=self.t_span),
+        ).ys
+        assert y_seq is not None, "Failed to solve PDE"
+
+        # trim_y_seq : ^(T, B*n, X*D)
+        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
+
+        # phys_x_hat : ^(n, B, T, X, 1)
+        phys_x_hat = jnp.expand_dims(
+            # ^(n, B, T, X)
+            jnp.reshape(
+                # ^(T, B*n, X*D) => ^(B*n, T, X)
+                jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
+                (pre_combs, -1, self.time_dim, self.num_grid_points),
+            ),
+            axis=-1,
+        )
+        # phys_x_hat : (m, B, T, X, 1)
+        phys_x_hat = jnp.pad(
+            jnp.tile(phys_x_hat, [post_combs, 1, 1, 1, 1]),
+            [(0, 0), (0, 0), self.pad[0], self.pad[1], (0, 0)],
+        )
+
+        assert x_hat.shape == phys_x_hat.shape[1:], (
+            f"Both clean estimates should be the same shape, {x_hat.shape} != {phys_x_hat.shape[1:]}."
+        )
+
+        for z_aux, post_func, selections in zip(
+            aux_latents[len(self.pre_funcs) : len(self.post_funcs)],
+            self.post_funcs,
+            post_selections,
+        ):
+            # z_expanded : (B, T, X, Z)
+            z_expanded = jnp.tile(
+                jnp.expand_dims(z_aux, axis=[1, 2]),
+                [1, x_hat.shape[1], x_hat.shape[2], 1],
+            )
+
+            def apply_func(phys, apply):
+                return (1 - apply) * phys + apply * post_func(
+                    jnp.concatenate([x_hat, phys, z_expanded], axis=3)
+                )
+
+            # phys_x_hat : (m, B, T, X, 1)
+            phys_x_hat = jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
+                phys_x_hat, selections
+            )
+
+        return phys_x_hat
+
     def forward(self, x: jax.Array, tau: jax.Array) -> jax.Array:
         """
         TODO: Add docstring
@@ -306,72 +472,17 @@ class PhysUNet2D(nnx.Module):
         """
         x_hat, aux_latents, phys_latents, _ = self._embed(x, tau)
 
-        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
-            """Internal PDE to be solved during the generation process."""
-            # y : (B, X*D)
-            assert len(y.shape) == 2, f"expected (B, X*D) but received {y.shape}"
-            assert y.shape[1] == self.pde_dim, (
-                f"Expected (B, {self.pde_dim}) but received {y.shape}"
-            )
+        # x_hat : (1, B, T, X, 1)
+        x_hat = self._generate(x, x_hat, aux_latents, phys_latents)
 
-            # y_dot_phys : (B, X*D)
-            y_dot_phys = self.physics_model(y, *phys_latents)
-
-            # y_dot_aux : (B, X*D)
-            y_dot_aux = jnp.zeros_like(y_dot_phys)
-            for z_aux, pre_func in zip(aux_latents, self.pre_funcs):
-                y_dot_aux += pre_func(
-                    jnp.concatenate(
-                        [z_aux, y, jnp.ones_like(y)[:, 0, None] * t],
-                        axis=-1,
-                    )
-                )
-
-            # ys_dot: (B, X*D)
-            return y_dot_phys + y_dot_aux
-
-        # init_cond : (B, X*D)
-        init_cond = jnp.pad(
-            remove_padding(x, self.pad)[:, 0, :, 0],
-            ((0, 0), (0, self.pde_dim - self.num_grid_points)),
+        assert len(x_hat.shape) == 5, (
+            "Internal issue with generation should return combination solution."
+        )
+        assert x_hat.shape[0] == 1, (
+            "Internal issue with generation should return single combination."
         )
 
-        # y_seq : (S, B, X*D)
-        y_seq = diffeqsolve(
-            ODETerm(PDE),
-            self.solver(),
-            t0=0.0,
-            t1=self.t1,
-            dt0=self.dt,
-            y0=init_cond,
-            saveat=SaveAt(ts=self.t_span),
-        ).ys
-        assert y_seq is not None, "Failed to solve PDE"
-
-        # trim_y_seq : (T, B, X*D)
-        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
-
-        # gen_phys : (B, T, X, 1)
-        gen_phys = jnp.expand_dims(
-            # (T, B, X*D) => (T, B, X) => (B, T, X)
-            jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
-            axis=3,
-        )
-        gen_phys = jnp.pad(gen_phys, [(0, 0), self.pad[0], self.pad[1], (0, 0)])
-
-        for z_aux, post_func in zip(
-            aux_latents[len(self.pre_funcs) :], self.post_funcs
-        ):
-            # z_expanded : (B, T, X, Z)
-            z_expanded = jnp.tile(
-                jnp.expand_dims(z_aux, axis=[1, 2]),
-                [1, x_hat.shape[1], x_hat.shape[2], 1],
-            )
-            # h : (B, T, X, 1)
-            x_hat = post_func(jnp.concatenate([x_hat, gen_phys, z_expanded], axis=3))
-
-        # x_hat : (B, T, X, 1)
-        return x_hat
+        return x_hat[0]
 
     def full_forward(
         self, x: jax.Array, tau: jax.Array
@@ -398,102 +509,23 @@ class PhysUNet2D(nnx.Module):
         # x_hat : (B, T, X, 1)
         h, aux_latents, phys_latents, phys_sig = self._embed(x, tau)
 
-        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
-            """Internal PDE to be solved during the generation process."""
-            # y : (B*n, X*D)
-            assert len(y.shape) == 2, f"expected (B, X*D) but received {y.shape}"
-            assert y.shape[1] == self.pde_dim, (
-                f"Expected (B, {self.pde_dim}) but received {y.shape}"
-            )
-
-            ys = y.reshape(self.pre_combs, -1, self.pde_dim)
-
-            # y_dot_phys : (n, B, X*D)
-            ys_dot_phys = jax.vmap(self.physics_model, in_axes=(0, None), out_axes=0)(
-                ys, *phys_latents
-            )
-
-            # ys_dot_aux : (n, B, X*D)
-            ys_dot_aux = jnp.zeros_like(ys_dot_phys)
-            for z_aux, pre_func, selections in zip(
-                aux_latents, self.pre_funcs, self.pre_selections
-            ):
-                # y : (B, D), apply : (1)
-                def apply_func(y, apply):
-                    return apply * jnp.pad(
-                        pre_func(
-                            jnp.concatenate(
-                                [z_aux, y, jnp.ones_like(y)[:, 0, None] * t], axis=-1
-                            )
-                        ),
-                        ((0, 0), (self.pde_dim - self.num_grid_points, 0)),
-                    )
-
-                ys_dot_aux += jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
-                    ys, selections
-                )
-
-            # ys_dot: (B*n, X*D)
-            return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.pde_dim))
-
-        # init_cond : ^(B*n, X*D)
-        init_cond = jnp.tile(
-            jnp.pad(
-                remove_padding(x, self.pad)[:, 0, :, 0],
-                ((0, 0), (0, self.pde_dim - self.num_grid_points)),
-            ),
-            reps=(self.pre_combs, 1),
-        )
-
-        # y_seq : ^(S, B*n, X*D)
-        y_seq = diffeqsolve(
-            ODETerm(PDE),
-            self.solver(),
-            t0=0.0,
-            t1=self.t1,
-            dt0=self.dt,
-            y0=init_cond,
-            saveat=SaveAt(ts=self.t_span),
-        ).ys
-        assert y_seq is not None, "Failed to solve PDE"
-
-        # trim_y_seq : ^(T, B*n, X*D)
-        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
-
-        # gen_phys : ^(n, B, T, X, 1)
-        x_hat = jnp.expand_dims(
-            # ^(n, B, T, X)
-            jnp.reshape(
-                # ^(T, B*n, X*D) => ^(B*n, T, X)
-                jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
-                (self.pre_combs, -1, self.time_dim, self.num_grid_points),
-            ),
-            axis=-1,
-        )
-        # gen_phys : (m, B, T, X, 1)
-        x_hat = jnp.pad(
-            jnp.tile(x_hat, [self.post_combs, 1, 1, 1, 1]),
-            [(0, 0), (0, 0), self.pad[0], self.pad[1], (0, 0)],
-        )
-
-        for z_aux, post_func, selections in zip(
-            aux_latents[len(self.pre_funcs) : len(self.post_funcs)],
-            self.post_funcs,
+        x_hat = self._generate(
+            x,
+            h,
+            aux_latents,
+            phys_latents,
+            self.pre_combs,
+            self.post_combs,
+            self.pre_selections,
             self.post_selections,
-        ):
-            # z_expanded : (B, T, X, Z)
-            z_expanded = jnp.tile(
-                jnp.expand_dims(z_aux, axis=[1, 2]),
-                [1, h.shape[1], h.shape[2], 1],
-            )
+        )
 
-            def apply_func(phys, apply):
-                return (1 - apply) * phys + apply * post_func(
-                    jnp.concatenate([h, phys, z_expanded], axis=3)
-                )
-
-            # x_hat : (m, B, T, X, 1)
-            x_hat = jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(x_hat, selections)
+        assert len(x_hat.shape) == 5, (
+            "Internal issue with generation should return combination solution."
+        )
+        assert x_hat.shape[0] == self.pre_combs * self.post_combs, (
+            "Internal issue with generation should return all combinations."
+        )
 
         # phys_sig : (B, T, X, 1), gen_phys: (B, T, X, 1), h : (m, B, T, X, 1)
         return phys_sig, x_hat[0], x_hat
