@@ -34,9 +34,6 @@ VISUALISER = {
 }
 
 
-IMAGE_GEN = ["mnist", "pivae-diffusion"]
-
-
 sns.set_theme(
     font="DejaVu Sans",
     rc={
@@ -106,8 +103,9 @@ def visualise(
     shape = raw.shape[1:]
 
     print("Creating visualisation...\n")
-    if dataset_name in IMAGE_GEN:
-        assert len(shape) == 3, f"Images require (H, W, C) received {shape}."
+    if len(shape) == 3:
+        print("Assuming image data.\n")
+
         grid = (
             raw.reshape(vis_cfg.n_rows, vis_cfg.n_cols, *shape)
             .transpose(0, 2, 1, 3, 4)
@@ -125,11 +123,8 @@ def visualise(
 
         plt.savefig(perm, format=vis_cfg.format)
         plt.savefig(latest, format=vis_cfg.format)
-    else:
-        # Assume output was time series
-        assert len(shape) == 1, (
-            f"Time series can only have 1 dimension, received {shape}"
-        )
+    elif len(shape) == 1:
+        print("Assuming point data.\n")
 
         fig, axes = plt.subplots(
             vis_cfg.n_rows, vis_cfg.n_cols, figsize=(12, 5), sharex=True, sharey=True
@@ -156,6 +151,8 @@ def visualise(
 
         plt.savefig(perm, format=vis_cfg.format)
         plt.savefig(latest, format=vis_cfg.format)
+    else:
+        raise NotImplementedError(f"Data shape {shape} not supported")
 
     print(f"Visualisations saved to {perm} and {latest}.")
 
