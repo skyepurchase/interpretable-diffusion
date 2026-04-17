@@ -12,7 +12,10 @@ Carry = tuple[DDIM | PAID, jax.Array, jax.Array]
 
 
 def make_step(
-    n_samples: int, shape: tuple[int, ...], condition: int = 0
+    n_samples: int,
+    shape: tuple[int, ...],
+    condition: int = 0,
+    estimation_type: str = "noise",
 ) -> Callable[[Carry, jax.Array], tuple[Carry, jax.Array]]:
     """
     Create the generation step keeping the number of samples and shape constant.
@@ -25,12 +28,19 @@ def make_step(
         The shape of the images
     condition : int
         How much of the data is fixed, i.e. conditioned on
+    estimation_type : str ("noise", "clean")
+        The type of estimation the model makes
 
     Returns
     -------
     step
         Function to be used in jax scan
     """
+
+    if estimation_type not in ["noise", "clean"]:
+        raise NotImplementedError(f"Estimation type {estimation_type} not implemented.")
+
+    noise_est = estimation_type == "noise"
 
     assert condition >= 0, "Condition period must be positive"
 
@@ -49,14 +59,19 @@ def make_step(
         noisy_x = prev * jnp.sqrt(alpha) + noise * jnp.sqrt(1 - alpha)
         x = jnp.concatenate([prev[:, :condition], noisy_x[:, condition:]], axis=1)
 
-        eps = model(
+        pred = model(
             jnp.pad(x, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
             step * jnp.ones(n_samples),
         )
-        eps = remove_padding(eps, model.pad)
+        pred = remove_padding(pred, model.pad)
 
-        denoised = (x - eps * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
-        curr = jnp.concatenate([prev[:, :condition], denoised[:, condition:]], axis=1)
+        if noise_est:
+            denoised = (x - pred * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
+            curr = jnp.concatenate(
+                [prev[:, :condition], denoised[:, condition:]], axis=1
+            )
+        else:
+            curr = jnp.concatenate([prev[:, :condition], pred[:, condition:]], axis=1)
 
         return (model, curr, key), curr
 
@@ -64,7 +79,12 @@ def make_step(
 
 
 def generate_images(
-    model: nnx.Module, array_like: jax.Array, condition: int = 0, *, key: jax.Array
+    model: nnx.Module,
+    array_like: jax.Array,
+    condition: int = 0,
+    estimation_type: str = "noise",
+    *,
+    key: jax.Array,
 ) -> jax.Array:
     """
     Given a trained DDIM style model and array with target shape generate images.
@@ -77,6 +97,8 @@ def generate_images(
         Array who's shape is matched
     condition : int
         How much of the data is fixed
+    estimation_type : str ("noise", "clean")
+        The type of estimation the model makes
     key : jax.Array
         PRNG key
 
@@ -100,7 +122,9 @@ def generate_images(
 
     init = (model, array_like.copy(), key)
 
-    gen_step = make_step(n_samples, img_shape, condition=condition)
+    gen_step = make_step(
+        n_samples, img_shape, condition=condition, estimation_type=estimation_type
+    )
     _, images = jax.lax.scan(gen_step, init, values)
 
     return images[-1]
@@ -121,7 +145,9 @@ def generate_timeseries(
     """
     Wrapper for generating images that are permuted for the correct time and x axes.
     """
-    generated = generate_images(model, array_like, condition=1, key=key)
+    generated = generate_images(
+        model, array_like, condition=1, estimation_type="clean", key=key
+    )
     images = jnp.concatenate(
         [generated[:3], jnp.expand_dims(array_like, axis=3)[:3]], axis=0
     )
