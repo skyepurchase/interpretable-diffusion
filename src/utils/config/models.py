@@ -124,6 +124,8 @@ class PAIDConfig:
     aux_funcs: list[PhysBlock]
     unmixer: UnmixerBlock
     phys_funcs: list[PhysBlock]
+    pre_funcs: list[PhysFunc]
+    post_funcs: list[PhysBlock]
     num_timesteps: int
     beta_schedule: str
     beta_start: float

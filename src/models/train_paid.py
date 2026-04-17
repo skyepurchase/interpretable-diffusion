@@ -45,16 +45,16 @@ def loss_fn(
     noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
     x = jnp.concatenate([data[:, :condition], noisy_x[:, condition:]], axis=1)
 
-    eps, phys_hat, phys = model.denoiser.full_forward(
+    phys_hat, phys, x_hat = model.denoiser.full_forward(
         jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), t
     )
 
-    eps = remove_padding(eps, model.pad)
     phys_hat = remove_padding(phys_hat, model.pad)
     phys = remove_padding(phys, model.pad)
+    x_hat = remove_padding(x_hat, [(0, 0)] + model.pad)
 
     estimation_loss = (
-        jnp.square((noise - eps)[:, condition:]).sum(axis=(1, 2, 3)).mean()
+        jnp.square((data - x_hat[-1])[:, condition:]).sum(axis=(1, 2, 3)).mean()
     )
     phys_loss = (
         jnp.square(phys_hat - jax.lax.stop_gradient(phys)).sum(axis=(1, 2, 3)).mean()
