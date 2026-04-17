@@ -9,6 +9,71 @@ from models.phys_vae import gen_mask
 from models.utils import remove_padding
 
 
+def augmentation_loss(
+    model: PAID,
+    phys_params: list[jax.Array],
+    y_init: jax.Array,
+    tau: jax.Array,
+    key: jax.Array,
+) -> jax.Array:
+    """
+    TODO: write docstring
+
+    Parameters
+    ----------
+    model : PAID
+        Model to train
+    phys_params : list[Array (B, Z)]
+        Estimated physics parameters
+    tau : Array (B)
+        Diffusion timestep
+    y_init : jax.Array (B, X)
+        The initial condition
+
+    Returns
+    -------
+    loss : jax.Array ()
+        The data augmentation loss
+    """
+    model.eval()
+
+    aug_params = []
+    for param, param_range in zip(phys_params, model.phys_param_ranges):
+        key, aug_key = jax.random.split(key, 2)
+        aug_param = jax.lax.stop_gradient(
+            (
+                jax.random.randint(aug_key, param.shape, 0, 1000)
+                * (param_range[1] - param_range[0])
+                / 1000
+            )
+            + param_range[0]
+        )
+        aug_params.append(aug_param)
+
+    aug_phys_hat = jax.lax.stop_gradient(
+        model.generate_physics(aug_params, jax.lax.stop_gradient(y_init))
+    )
+
+    model.train()
+
+    t_emb = model.denoiser.unet.time_proj(tau)
+    t_emb = model.denoiser.unet.time_embedding(t_emb)
+
+    aug_loss = jnp.zeros(())
+    for phys_func, aug_param in zip(model.denoiser.phys_funcs, aug_params):
+        phys_features = jnp.pad(
+            aug_phys_hat, [(0, 0), model.pad[0], model.pad[1], (0, 0)]
+        )
+        for block in model.denoiser.unet.blocks_down:
+            phys_features = block(phys_features, t_emb)
+
+        phys_features = model.denoiser.unet.block_mid(phys_features, t_emb)
+
+        aug_loss += jnp.square(phys_func(phys_features) - aug_param).sum(axis=1).mean()
+
+    return aug_loss
+
+
 def discrepancy_loss(x_hats: jax.Array) -> jax.Array:
     """
     TODO: create docstring
@@ -71,17 +136,17 @@ def loss_fn(
     key, time_key, noise_key = split(key, num=3)
     noise = jax.random.normal(noise_key, data.shape)
 
-    t = jax.random.randint(
+    tau = jax.random.randint(
         time_key, (batch_size // 2 + 1,), minval=0, maxval=model.num_timesteps
     )
-    t = jnp.concatenate([t, model.num_timesteps - t - 1], axis=0)[:batch_size]
+    tau = jnp.concatenate([tau, model.num_timesteps - tau - 1], axis=0)[:batch_size]
 
-    alpha = (1 - model.betas).cumprod(axis=0)[t].reshape(-1, 1, 1, 1)
+    alpha = (1 - model.betas).cumprod(axis=0)[tau].reshape(-1, 1, 1, 1)
     noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
     x = jnp.concatenate([data[:, :condition], noisy_x[:, condition:]], axis=1)
 
-    phys_hat, phys, x_hat = model.denoiser.full_forward(
-        jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), t
+    x_hat, phys_hat, phys, phys_params = model.denoiser.full_forward(
+        jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), tau
     )
 
     phys_hat = remove_padding(phys_hat, model.pad)
@@ -97,9 +162,14 @@ def loss_fn(
 
     disc_loss = discrepancy_loss(x_hat)
 
-    full_loss = estimation_loss + phys_loss + disc_loss
+    key, aug_key = jax.random.split(key, 2)
+    aug_loss = augmentation_loss(model, phys_params, data[:, 0, :, 0], tau, key=aug_key)
 
-    return full_loss, jnp.stack([full_loss, estimation_loss, phys_loss, disc_loss])
+    full_loss = estimation_loss + phys_loss + disc_loss + aug_loss
+
+    return full_loss, jnp.stack(
+        [full_loss, estimation_loss, phys_loss, disc_loss, aug_loss]
+    )
 
 
 @nnx.jit

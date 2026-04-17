@@ -1,9 +1,9 @@
 from functools import reduce
-from typing import Optional
+from typing import Callable, Optional, ParamSpec
 
 import jax
 import jax.numpy as jnp
-from diffrax import ODETerm, SaveAt, diffeqsolve
+from diffrax import AbstractSolver, ODETerm, SaveAt, diffeqsolve
 from diffrax._custom_types import RealScalarLike
 from diffuse.neural_network.blocks import ResnetBlock
 from diffuse.neural_network.nn import CondUNet2D
@@ -21,7 +21,21 @@ from utils.config.models import PAIDConfig
 class PhysUNet2D(nnx.Module):
     """TODO: Add docstring"""
 
-    def __init__(self, cfg: PAIDConfig, pad: list[tuple[int, int]], rngs: nnx.Rngs):
+    def __init__(
+        self,
+        cfg: PAIDConfig,
+        integral_level: int,
+        t_span: jax.Array,
+        t1: float,
+        dt: float,
+        num_grid_points: int,
+        pde_dim: int,
+        time_dim: int,
+        physics_model: Callable[[jax.Array, ParamSpec], jax.Array],
+        solver: Callable[[], AbstractSolver],
+        pad: list[tuple[int, int]],
+        rngs: nnx.Rngs,
+    ):
         # Constants
         self.pad = pad
 
@@ -34,36 +48,16 @@ class PhysUNet2D(nnx.Module):
         )
 
         ## PDE solver constants
-        self.integral_level = cfg.pde.integral_level
-        self.integral_len = (cfg.pde.time_dim - 1) * self.integral_level + 1
-        self.integral_step = cfg.pde.timestep / float(self.integral_level)
-        self.t_span = jnp.linspace(
-            0.0, self.integral_step * (self.integral_len - 1), self.integral_len
-        )
+        self.integral_level = integral_level
+        self.t_span = t_span
+        self.t1 = t1
+        self.dt = dt
+        self.num_grid_points = num_grid_points
+        self.pde_dim = pde_dim
+        self.time_dim = time_dim
 
-        self.t1 = self.integral_len
-        self.dt = self.integral_step
-        self.num_grid_points = cfg.pde.num_grid_points
-        self.pde_dim = self.num_grid_points * NUM_DERIVATIVES.get(cfg.pde.system, 1)
-        self.time_dim = cfg.pde.time_dim
-
-        if self.num_grid_points > 1:
-            ds = cfg.pde.length / (self.num_grid_points - 1)
-        else:
-            ds = 0.0
-
-        # PDE solver functions
-        if cfg.pde.system not in PHYS_MODELS:
-            raise NotImplementedError(
-                f"Physics model {cfg.pde.system} is not implemented."
-            )
-        self.physics_model = PHYS_MODELS.get(cfg.pde.system, lambda _: None)(
-            jnp.array(ds, dtype=jnp.float32)
-        )
-
-        if cfg.pde.solver not in SOLVERS:
-            raise NotImplementedError(f"Solver {cfg.pde.solver} is not implemented.")
-        self.solver = SOLVERS.get(cfg.pde.solver)
+        self.physics_model = physics_model
+        self.solver = solver
 
         # Modules
         # temporal Unet
@@ -486,7 +480,7 @@ class PhysUNet2D(nnx.Module):
 
     def full_forward(
         self, x: jax.Array, tau: jax.Array
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array, list[jax.Array]]:
         """
         TODO: Add docstring
 
@@ -499,21 +493,23 @@ class PhysUNet2D(nnx.Module):
 
         Returns
         -------
+        x_hat : Array (m, B, W, H, C) padded
+            Estimation of clean signal using combinations of auxiliary functions
         phys_sig : Array (B, W, H, C) padded
             Estimation of the known physics signal
         gen_phys : Array (B, W, H, C) padded
-            Solved physics
-        x_hat : Array (m, B, W, H, C) padded
-            Estimation of clean signal, should be close to gen_phys
+            The physics generated from estimated parameters
+        phys_params : list[Array (B, Z)]
+            Estimation of physics parameters
         """
         # x_hat : (B, T, X, 1)
-        h, aux_latents, phys_latents, phys_sig = self._embed(x, tau)
+        h, aux_latents, phys_params, phys_sig = self._embed(x, tau)
 
         x_hat = self._generate(
             x,
             h,
             aux_latents,
-            phys_latents,
+            phys_params,
             self.pre_combs,
             self.post_combs,
             self.pre_selections,
@@ -527,8 +523,9 @@ class PhysUNet2D(nnx.Module):
             "Internal issue with generation should return all combinations."
         )
 
-        # phys_sig : (B, T, X, 1), gen_phys: (B, T, X, 1), h : (m, B, T, X, 1)
-        return phys_sig, x_hat[0], x_hat
+        gen_phys = x_hat[0]
+        # x_hat: (m, B, T, X, 1), phys_sig : (B, T, X, 1), gen_phys : (B, T, X, 1), phys_params : (B, Z)
+        return x_hat, phys_sig, gen_phys, phys_params
 
 
 class PAID(nnx.Module):
@@ -537,14 +534,127 @@ class PAID(nnx.Module):
     """
 
     def __init__(self, cfg: PAIDConfig, rngs: nnx.Rngs) -> None:
+        # Diffusion constants
         self.num_timesteps = cfg.num_timesteps
         self.betas = compute_betas(
             cfg.beta_schedule, cfg.beta_start, cfg.beta_end, self.num_timesteps
         )
 
-        self.denoiser = PhysUNet2D(cfg, cfg.pad, rngs)
+        # Physics constants + functions
+        self.integral_level = cfg.pde.integral_level
+        self.integral_len = (cfg.pde.time_dim - 1) * self.integral_level + 1
+        self.integral_step = cfg.pde.timestep / float(self.integral_level)
+        self.t_span = jnp.linspace(
+            0.0, self.integral_step * (self.integral_len - 1), self.integral_len
+        )
 
+        self.t1 = self.integral_len
+        self.dt = self.integral_step
+        self.num_grid_points = cfg.pde.num_grid_points
+        self.pde_dim = self.num_grid_points * NUM_DERIVATIVES.get(cfg.pde.system, 1)
+        self.time_dim = cfg.pde.time_dim
+
+        if self.num_grid_points > 1:
+            ds = cfg.pde.length / (self.num_grid_points - 1)
+        else:
+            ds = 0.0
+
+        # PDE solver functions
+        if cfg.pde.system not in PHYS_MODELS:
+            raise NotImplementedError(
+                f"Physics model {cfg.pde.system} is not implemented."
+            )
+        self.physics_model = PHYS_MODELS.get(cfg.pde.system, lambda _: None)(
+            jnp.array(ds, dtype=jnp.float32)
+        )
+
+        if cfg.pde.solver not in SOLVERS:
+            raise NotImplementedError(f"Solver {cfg.pde.solver} is not implemented.")
+        self.solver = SOLVERS.get(cfg.pde.solver)
+
+        assert self.physics_model is not None
+        assert self.solver is not None
+
+        # Denoiser
+        self.denoiser = PhysUNet2D(
+            cfg,
+            self.integral_level,
+            self.t_span,
+            self.t1,
+            self.dt,
+            self.num_grid_points,
+            self.pde_dim,
+            self.time_dim,
+            self.physics_model,
+            self.solver,
+            cfg.pad,
+            rngs,
+        )
+
+        # Additional constants
+        self.phys_param_ranges = cfg.pde.phys_param_ranges
         self.pad = cfg.pad
 
     def __call__(self, x: jax.Array, t: jax.Array) -> jax.Array:
         return self.denoiser.forward(x, t)
+
+    def generate_physics(self, params: list[jax.Array], init_y: jax.Array) -> jax.Array:
+        """
+        TODO: generate docstring
+
+        Parameters
+        ----------
+        params : list[Array (B, Z)]
+            List of physics parameters
+        init_y : Array (B, X)
+            Initial condition
+
+        Returns
+        -------
+        gen_phys : Array (B, W, H, C)
+            Physics generated by the provided parameters
+        """
+
+        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
+            """Internal PDE to be solved during the generation process."""
+            # y : (B*n, X*D)
+            assert len(y.shape) == 2, f"expected (B, X*D) but received {y.shape}"
+            # assert y.shape[1] == self.pde_dim, (
+            #     f"Expected (B, {self.pde_dim}) but received {y.shape}"
+            # )
+
+            return self.physics_model(y, *params)
+
+        # init_cond : ^(B*n, X*D)
+        init_cond = jnp.pad(
+            init_y,
+            ((0, 0), (0, self.pde_dim - self.num_grid_points)),
+        )
+
+        # y_seq : ^(S, B, X*D)
+        y_seq = diffeqsolve(
+            ODETerm(PDE),
+            self.solver(),
+            t0=0.0,
+            t1=self.t1,
+            dt0=self.dt,
+            y0=init_cond,
+            saveat=SaveAt(ts=self.t_span),
+        ).ys
+        assert y_seq is not None, "Failed to solve PDE"
+
+        # trim_y_seq : ^(T, B, X*D)
+        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
+
+        # gen_phys : ^(B, T, X, 1)
+        gen_phys = jnp.expand_dims(
+            # ^(B, T, X)
+            jnp.reshape(
+                # ^(T, B, X*D) => ^(B, T, X)
+                jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
+                (-1, self.time_dim, self.num_grid_points),
+            ),
+            axis=-1,
+        )
+
+        return gen_phys
