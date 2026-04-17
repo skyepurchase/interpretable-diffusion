@@ -597,6 +597,7 @@ class PAID(nnx.Module):
         )
 
         # Additional constants
+        self.condition = cfg.condition
         self.phys_param_ranges = cfg.pde.phys_param_ranges
         self.pad = cfg.pad
 

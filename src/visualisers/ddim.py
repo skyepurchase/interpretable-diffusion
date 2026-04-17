@@ -145,8 +145,15 @@ def generate_timeseries(
     """
     Wrapper for generating images that are permuted for the correct time and x axes.
     """
+    if isinstance(model, PAID):
+        condition = model.condition
+        est_type = "clean"
+    else:
+        condition = 1
+        est_type = "noise"
+
     generated = generate_images(
-        model, array_like, condition=1, estimation_type="clean", key=key
+        model, array_like, condition=condition, estimation_type=est_type, key=key
     )
     images = jnp.concatenate(
         [generated[:3], jnp.expand_dims(array_like, axis=3)[:3]], axis=0

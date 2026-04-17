@@ -137,4 +137,5 @@ class PAIDConfig:
     beta: float
     gamma: float
 
+    condition: int = 5
     pad: list[tuple] = field(default_factory=lambda: [(0, 0), (0, 0)])

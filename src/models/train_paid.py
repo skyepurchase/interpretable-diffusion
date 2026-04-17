@@ -128,9 +128,6 @@ def loss_fn(
     loss : Array ()
         The total loss of the model on the data
     """
-    # TODO: Make condition a config parameter
-    condition = 1
-
     batch_size = data.shape[0]
 
     key, time_key, noise_key = split(key, num=3)
@@ -143,7 +140,9 @@ def loss_fn(
 
     alpha = (1 - model.betas).cumprod(axis=0)[tau].reshape(-1, 1, 1, 1)
     noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
-    x = jnp.concatenate([data[:, :condition], noisy_x[:, condition:]], axis=1)
+    x = jnp.concatenate(
+        [data[:, : model.condition], noisy_x[:, model.condition :]], axis=1
+    )
 
     x_hat, phys_hat, phys, phys_params = model.denoiser.full_forward(
         jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), tau
@@ -154,7 +153,7 @@ def loss_fn(
     x_hat = remove_padding(x_hat, [(0, 0)] + model.pad)
 
     reconstruction_loss = (
-        jnp.square((data - x_hat[-1])[:, condition:]).sum(axis=(1, 2, 3)).mean()
+        jnp.square((data - x_hat[-1])[:, model.condition :]).sum(axis=(1, 2, 3)).mean()
     )
     phys_loss = model.beta * (
         jnp.square(phys_hat - jax.lax.stop_gradient(phys)).sum(axis=(1, 2, 3)).mean()
