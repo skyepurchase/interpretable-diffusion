@@ -17,13 +17,18 @@ PRECISION = 1000
 class PiVAEDataset(Dataset):
     """A wrapper of the torch Dataset for the PiVAE datasets."""
 
-    def __init__(self, series: NDArray) -> None:
+    def __init__(self, series: NDArray, retain_dim: bool = False) -> None:
         super().__init__()
         # series is in the form (B, x, t) flattened would give (B, t*x)
         # Instead (B, x*t) is desired so data[:, :12] gives the initial condition. Thus (B, t, x)
         time_forward = np.permute_dims(series[:, 1:], (0, 2, 1))
-        self.data = torch.tensor(time_forward).flatten(start_dim=1)
-        self.timestep = torch.tensor(series[:, 0]).flatten(start_dim=1)
+
+        if retain_dim:
+            self.data = torch.tensor(time_forward)
+            self.timestep = torch.tensor(series[:, 0])
+        else:
+            self.data = torch.tensor(time_forward).flatten(start_dim=1)
+            self.timestep = torch.tensor(series[:, 0]).flatten(start_dim=1)
 
     def __len__(self) -> int:
         return len(self.data)
@@ -234,9 +239,11 @@ def get_pivae(cfg: PiVAEConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
             f"Loaded train set has shape {train_pool.shape} expected at least {(cfg.train_split, train_pool.shape[1], 50)} according to config"
         )
 
-    test_dataset = PiVAEDataset(test)
-    validation_dataset = PiVAEDataset(validation)
-    train_dataset = PiVAEDataset(np.random.permutation(train_pool)[: cfg.train_split])
+    test_dataset = PiVAEDataset(test, cfg.retain_dim)
+    validation_dataset = PiVAEDataset(validation, cfg.retain_dim)
+    train_dataset = PiVAEDataset(
+        np.random.permutation(train_pool)[: cfg.train_split], cfg.retain_dim
+    )
 
     train_loader = DataLoader(
         train_dataset, batch_size=cfg.batch_size, collate_fn=np_collate, shuffle=True

@@ -1,96 +1,38 @@
-import os
-import shutil
-from datetime import datetime
-from typing import Optional
-
-import orbax.checkpoint as ocp
-from flax import nnx
-from flax.nnx import Rngs
-
-from models.phys_vae import PhysVAE
-from models.train_ddim import train_step as ddim_step
-from models.train_phys_vae import train_step as phys_vae_step
-from models.train_vae import train_step as vae_step
-from utils.config.models import DDIMConfig, PhysVAEConfig, VAEConfig
-from utils.misc import TrainStep
-
-from .ddim import DDIM
-from .vae import VAE
-
-MODELS = {
-    "vae": (VAE, VAEConfig),
-    "ddim": (DDIM, DDIMConfig),
-    "phys_vae": (PhysVAE, PhysVAEConfig),
-}
-
-TRAIN_STEPPER: dict[str, TrainStep] = {
-    "ddim": ddim_step,
-    "vae": vae_step,
-    "phys_vae": phys_vae_step,
-}
-
-LOSS_LABELS: dict[str, list[str]] = {
-    "ddim": ["loss"],
-    "vae": ["loss"],
-    "phys_vae": [
-        "loss",
-        "reconstruction",
-        "kl",
-        "discrepancy",
-        "physics",
-        "augmentation",
-    ],
-}
+import jax.numpy as jnp
+from jax import Array
 
 
-def make_model(name: str, cfg, rngs: Rngs) -> nnx.Module:
-    """Create a model object based on the name and assorted config"""
-    if name in MODELS:
-        model, config = MODELS[name]
+def remove_padding(a: Array, padding: list[tuple[int, int]]):
+    """
+    Remove padding from images only when padding is positive for that dimension.
 
-        return model(config(**cfg), rngs)
+    Parameters
+    a : ArrayLike (B, ..., C)
+        Array to remove padding from. Assumes it is batched with a channel.
+    padding : list[tuple[int, int]]
+        The padding added to the array.
 
-    raise NotImplementedError(f"Model {name} not implemented")
-
-
-def load_model(name: str, cfg, checkpoint, rngs: Rngs) -> nnx.Module:
-    """Load model (specified by the config) from a specific checkpoint"""
-    model = make_model(name, cfg, rngs)
-    graph, state = nnx.split(model)
-
-    checkpointer = ocp.StandardCheckpointer()
-    checkpoint_state = checkpointer.restore(checkpoint, state)
-
-    return nnx.merge(graph, checkpoint_state)
-
-
-def save_model(model: nnx.Module, folder: str) -> None:
-    """Save the given model in the specified folder."""
-    if not os.path.isdir(folder):
-        os.makedirs(folder)
-
-    _, state = nnx.split(model)
-
-    # Async used to verify the full save occurs
-    checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
-    checkpointer.save(
-        os.path.join(os.getcwd(), folder, datetime.now().strftime("%y%m%d_%H%M")), state
+    Returns
+    -------
+    a : Arraylike (B, ..., C)
+        Array without the padding
+    """
+    assert len(padding) == len(a.shape) - 2, (
+        f"Number of padding dimensions needs to match a padding dimensions, {len(padding)} != {len(a.shape) - 2}."
+    )
+    assert all(map(lambda p: len(p) == 2, padding)), (
+        f"Expected padding to specify two numbers, received {list(map(lambda p: len(p), padding))}."
     )
 
-    latest_path = os.path.join(os.getcwd(), folder, "latest")
-    if os.path.isdir(latest_path):
-        shutil.rmtree(latest_path)
+    for dim in range(1, len(a.shape) - 2):
+        length = a.shape[dim]
+        left_pad = padding[dim - 1][0]
+        right_pad = padding[dim - 1][1]
 
-    checkpointer.save(latest_path, state)
+        assert length > left_pad + right_pad, (
+            f"Unable to remove padding from axis {dim}, {length} <= {left_pad} + {right_pad}."
+        )
 
-    checkpointer.wait_until_finished()
+        _, a, _ = jnp.split(a, [left_pad, length - right_pad], axis=dim)
 
-
-def get_trainer(
-    name: str,
-) -> tuple[TrainStep, Optional[list[str]]]:
-    """Return the relevant trainer function for the desired model"""
-    if name in TRAIN_STEPPER:
-        return TRAIN_STEPPER[name], LOSS_LABELS[name]
-
-    raise NotImplementedError(f"Trainer for {name} not implemented")
+    return a
