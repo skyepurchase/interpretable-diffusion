@@ -5,19 +5,43 @@ from flax import nnx
 from jax.random import split
 
 from models.ddim import DDIM
+from models.paid import PAID
+from models.utils import remove_padding
 
 
 def noise_estimation_loss(
-    model: DDIM, data: jax.Array, t: jax.Array, noise: jax.Array, betas: jax.Array
+    model: DDIM | PAID,
+    data: jax.Array,
+    t: jax.Array,
+    noise: jax.Array,
+    betas: jax.Array,
+    condition: int = 0,
 ) -> jax.Array:
     """
-    This implementation matches that in the original DDIM paper https://github.com/ermongroup/ddim/blob/main/functions/losses.py.
-    """
-    alpha = (1 - betas).cumprod(axis=0)[t].reshape(-1, 1, 1, 1)
-    x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
-    output = model(x, t)
+    TODO: Meaningful docstring
 
-    return jnp.square(noise - output).sum(axis=(1, 2, 3)).mean(axis=0)
+    Returns
+    -------
+    loss : Array ()
+        The noise estimation loss
+    """
+    assert condition >= 0, "Condition period must be non-negative"
+    # TODO: add more flexibility
+    assert condition < data.shape[1], (
+        f"Condition period must be less the width of the data, {condition} >= {data.shape[1]}"
+    )
+
+    alpha = (1 - betas).cumprod(axis=0)[t].reshape(-1, 1, 1, 1)
+    noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
+    x = jnp.concatenate([data[:, :condition], noisy_x[:, condition:]], axis=1)
+    eps = model(jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), t)
+    eps = remove_padding(eps, model.pad)
+
+    assert eps.shape == noise.shape, (
+        f"Noise and estimation must be same shape, {eps.shape} != {noise.shape}."
+    )
+
+    return jnp.square((noise - eps)[:, condition:]).sum(axis=(1, 2, 3)).mean(axis=0)
 
 
 @nnx.jit
@@ -47,6 +71,9 @@ def train_step(
     """
     if not isinstance(model, DDIM):
         raise TypeError(f"Expected model type to be DDIM not {type(model)}")
+
+    if len(data.shape) < 4:
+        data = jnp.expand_dims(data, 3)
 
     batch_size = data.shape[0]
     betas = model.betas

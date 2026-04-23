@@ -18,6 +18,7 @@ class PiVAEConfig:
     train_split: int = 1000
     timesteps: int = 50
     batch_size: int = 128
+    retain_dim: bool = False
 
 
 @dataclass

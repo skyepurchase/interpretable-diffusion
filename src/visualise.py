@@ -11,7 +11,7 @@ from datasets import get_dataset
 from models import load_model
 from utils.config import ExperimentConfig, VisualiserConfig, load_config
 from utils.config.datasets import get_full_dataset_name
-from visualisers.ddim import generate_images
+from visualisers.ddim import generate_mnist, generate_timeseries
 from visualisers.vae import (
     reconstruct_1D_series,
     reconstruct_images,
@@ -24,14 +24,14 @@ NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 VISUALISER = {
     "mnist": {
         "vae": reconstruct_images,
-        "ddim": generate_images,
+        "ddim": generate_mnist,
     },
     "pivae-pendulum": {"phys_vae": reconstruct_point_series},
-    "pivae-diffusion": {"phys_vae": reconstruct_1D_series},
+    "pivae-diffusion": {
+        "phys_vae": reconstruct_1D_series,
+        "paid": generate_timeseries,
+    },
 }
-
-
-IMAGE_GEN = ["mnist", "pivae-diffusion"]
 
 
 sns.set_theme(
@@ -103,8 +103,9 @@ def visualise(
     shape = raw.shape[1:]
 
     print("Creating visualisation...\n")
-    if dataset_name in IMAGE_GEN:
-        assert len(shape) == 3, f"Images require (H, W, C) received {shape}."
+    if len(shape) == 3:
+        print("Assuming image data.\n")
+
         grid = (
             raw.reshape(vis_cfg.n_rows, vis_cfg.n_cols, *shape)
             .transpose(0, 2, 1, 3, 4)
@@ -122,11 +123,8 @@ def visualise(
 
         plt.savefig(perm, format=vis_cfg.format)
         plt.savefig(latest, format=vis_cfg.format)
-    else:
-        # Assume output was time series
-        assert len(shape) == 1, (
-            f"Time series can only have 1 dimension, received {shape}"
-        )
+    elif len(shape) == 1:
+        print("Assuming point data.\n")
 
         fig, axes = plt.subplots(
             vis_cfg.n_rows, vis_cfg.n_cols, figsize=(12, 5), sharex=True, sharey=True
@@ -153,6 +151,8 @@ def visualise(
 
         plt.savefig(perm, format=vis_cfg.format)
         plt.savefig(latest, format=vis_cfg.format)
+    else:
+        raise NotImplementedError(f"Data shape {shape} not supported")
 
     print(f"Visualisations saved to {perm} and {latest}.")
 

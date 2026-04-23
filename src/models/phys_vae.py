@@ -89,13 +89,26 @@ NUM_DERIVATIVES = {
 SOLVERS = {"euler": Euler}
 
 
-def gen_selections(n_elms: int) -> jax.Array:
+def gen_selections(n_pre_elms: int, n_post_elms: int) -> tuple[jax.Array, jax.Array]:
     """Given a number of elements generate binary representations for selection"""
-    combs = 2**n_elms
-    numbers = jnp.arange(combs, dtype=jnp.uint8)
-    bits = jnp.unpackbits(numbers[:, None], axis=1, count=n_elms, bitorder="little")
+    pre_combs = 2**n_pre_elms
+    combs = 2 ** (n_pre_elms + n_post_elms)
 
-    return bits.T.astype(jnp.int32)
+    numbers = jnp.arange(combs, dtype=jnp.uint8)
+    bits = jnp.unpackbits(
+        numbers[:, None], axis=1, count=n_pre_elms + n_post_elms, bitorder="little"
+    )
+
+    selections = bits.T.astype(jnp.int32)
+    pre_selections = selections[:n_pre_elms, :pre_combs]
+    post_selections = selections[n_pre_elms:] * jnp.ones((1, combs))
+
+    if n_pre_elms == 0:
+        pre_selections = jnp.zeros((1, pre_combs))
+    if n_post_elms == 0:
+        post_selections = jnp.zeros((1, combs))
+
+    return pre_selections, post_selections
 
 
 def gen_mask(total_combs: int) -> jax.Array:
@@ -204,7 +217,7 @@ class PhysEncoder(nnx.Module):
 
         phys_stats = []
         for phys_func in self.phys_funcs:
-            mu, log_sigma = jnp.split(phys_func(x), 2, axis=1)
+            mu, log_sigma = jnp.split(phys_func(phys), 2, axis=1)
             phys_stats.append((mu, log_sigma))
 
         return phys_stats, aux_stats, phys
@@ -284,13 +297,6 @@ class PhysDecoder(nnx.Module):
                 rngs=rngs,
             )
             self.pre_funcs.append(func)
-        self.pre_combs = 2**self.num_pre_funcs
-
-        if self.num_pre_funcs > 0:
-            self.pre_selections = gen_selections(self.num_pre_funcs)
-        else:
-            # Dummy to aid saving
-            self.pre_selections = jnp.zeros((1))
 
         for func_cfg in cfg.post_funcs:
             func = make_mlp(
@@ -301,14 +307,12 @@ class PhysDecoder(nnx.Module):
                 rngs=rngs,
             )
             self.post_funcs.append(func)
+
+        self.pre_combs = 2**self.num_pre_funcs
         self.post_combs = 2**self.num_post_funcs
-        if self.num_post_funcs > 0:
-            self.post_selections = gen_selections(
-                self.num_pre_funcs + self.num_post_funcs
-            )[self.num_pre_funcs :]
-        else:
-            # Dummy to aid saving
-            self.post_selections = jnp.zeros((1))
+        self.pre_selections, self.post_selections = gen_selections(
+            self.num_pre_funcs, self.num_post_funcs
+        )
 
         if self.num_grid_points > 1:
             ds = L / (self.num_grid_points - 1)
@@ -391,7 +395,7 @@ class PhysDecoder(nnx.Module):
             # ys_dot : (B*n, L*D)
             return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.ode_dim))
 
-        # (B, L*D) => (B*n, L*D)
+        # (B*n, L*D)
         init_cond = jnp.tile(
             # (B, L) => (B, L*D)
             jnp.pad(
@@ -474,8 +478,8 @@ class PhysDecoder(nnx.Module):
             The statistics for the series with the mean and log variance stacked in the first axis
         """
 
-        def ODE(t: RealScalarLike, y: PyTree, _args: PyTree):
-            """Internal ODE to be solved during the generation process."""
+        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
+            """Internal PDE to be solved during the generation process."""
             # y : (B, L*D)
             assert len(y.shape) == 2, f"expected (B, L*D) but received {y.shape}"
             assert y.shape[1] == self.ode_dim, (
@@ -506,13 +510,13 @@ class PhysDecoder(nnx.Module):
                 )
 
             # ys_dot : (B, L*D)
-            return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.ode_dim))
+            return ys_dot_phys + ys_dot_aux
 
         # init_cond : (B, L*D)
         init_cond = jnp.pad(init_y, ((0, 0), (0, self.ode_dim - self.num_grid_points)))
 
         y_seq = diffeqsolve(
-            ODETerm(ODE),
+            ODETerm(PDE),
             self.solver(),
             t0=0.0,
             t1=self.t1,

@@ -12,8 +12,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import get_dataset
-from models import get_trainer, make_model
-from models.utils import save_model
+from models import get_trainer, make_model, save_model
 from utils.config import load_config
 from utils.config.trainer import TrainerConfig
 from utils.misc import TrainStep
