@@ -113,7 +113,7 @@ class PDEConfig:
     timestep: float
     solver: str
     integral_level: int
-    length: float = 0.0
+    spatial_length: float = 0.0
     num_grid_points: int = 1
 
 
