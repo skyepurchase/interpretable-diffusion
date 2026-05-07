@@ -31,6 +31,9 @@ VISUALISER = {
         "phys_vae": reconstruct_1D_series,
         "paid": generate_timeseries,
     },
+    "pdebench-burgers": {
+        "paid": generate_timeseries,
+    },
 }
 
 

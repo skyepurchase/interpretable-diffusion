@@ -155,8 +155,5 @@ def generate_timeseries(
     generated = generate_images(
         model, array_like, condition=condition, estimation_type=est_type, key=key
     )
-    images = jnp.concatenate(
-        [generated[:3], jnp.expand_dims(array_like, axis=3)[:3]], axis=0
-    )
 
-    return jnp.permute_dims(images, (0, 2, 1, 3))
+    return jnp.permute_dims(generated, (0, 2, 1, 3))
