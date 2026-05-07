@@ -13,7 +13,8 @@ from jaxtyping import PyTree
 from models.ddim import compute_betas
 from models.mlp import make_mlp
 from models.modules.acts import ACTS
-from models.phys_vae import NUM_DERIVATIVES, PHYS_MODELS, SOLVERS, gen_selections
+from models.phys_vae import gen_selections
+from models.physics_models import get_physics_model, get_solver
 from models.utils import remove_padding
 from utils.config.models import PAIDConfig
 
@@ -570,25 +571,15 @@ class PAID(nnx.Module):
         self.t_span = jnp.linspace(0.0, self.t1, self.time_dim)
 
         self.num_grid_points = cfg.pde.num_grid_points
-        self.pde_dim = self.num_grid_points * NUM_DERIVATIVES.get(cfg.pde.system, 1)
-
         if self.num_grid_points > 1:
             ds = cfg.pde.spatial_length / (self.num_grid_points - 1)
         else:
             ds = 0.0
 
-        # PDE solver functions
-        if cfg.pde.system not in PHYS_MODELS:
-            raise NotImplementedError(
-                f"Physics model {cfg.pde.system} is not implemented."
-            )
-        self.physics_model = PHYS_MODELS.get(cfg.pde.system, lambda _: None)(
-            jnp.array(ds, dtype=jnp.float32)
-        )
-
-        if cfg.pde.solver not in SOLVERS:
-            raise NotImplementedError(f"Solver {cfg.pde.solver} is not implemented.")
-        self.solver = SOLVERS.get(cfg.pde.solver)
+        physics_model, _, num_derivatives = get_physics_model(cfg.pde.system)
+        self.pde_dim = self.num_grid_points * num_derivatives
+        self.physics_model = physics_model(jnp.array(ds))
+        self.solver = get_solver(cfg.pde.solver)
 
         assert self.physics_model is not None
         assert self.solver is not None

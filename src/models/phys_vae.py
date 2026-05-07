@@ -1,92 +1,16 @@
-from collections.abc import Callable
 from functools import reduce
 
 import jax
 import jax.numpy as jnp
-from diffrax import Euler, ODETerm, SaveAt, diffeqsolve
+from diffrax import ODETerm, SaveAt, diffeqsolve
 from diffrax._custom_types import RealScalarLike
 from flax import nnx
 from jaxtyping import PyTree
 
 from models.mlp import make_mlp
+from models.physics_models import get_physics_model, get_solver
 from utils.config.models import PhysDecoderConfig, PhysEncoderConfig, PhysVAEConfig
 from utils.misc import Distribution
-
-
-def pendulum_model(y: jax.Array, omega: jax.Array) -> jax.Array:
-    """
-    Calculate the simple harmonic oscillator ODE.
-    d2y_dt2 + omega*sin(y) = 0
-
-    Parameters
-    ----------
-    y : (B, 2)
-        The input dynamics, y and dy
-    omega : (1,)
-        The known parameter of the pendulum system
-
-    Returns
-    -------
-    dy : (B, 2)
-        The output dynamics, dy and ddy
-    """
-    return jnp.concatenate(
-        [y[:, 1].reshape(-1, 1), -(omega**2) * jnp.sin(y[:, 0].reshape(-1, 1))], axis=1
-    )
-
-
-def make_diffusion_model(ds: jax.Array) -> Callable[[jax.Array, jax.Array], jax.Array]:
-    """Create diffusion physics model with given spatial discretisation"""
-
-    def diffusion_model(y: jax.Array, a: jax.Array) -> jax.Array:
-        """
-        Calculate the simple diffusion ODE.
-        dy_dt - a*d2y_ds2 = 0
-
-        Parameters
-        ----------
-        y : (B, L)
-            The input dynamics, y
-        a : (1,)
-            The known parameter of the diffusion system
-
-        Returns
-        -------
-        dy : (B, L)
-            The output dynamics, dy_dt
-        """
-        interior = y[:, 1:-1]
-
-        # finite differences
-        dy_ds = jnp.gradient(interior, ds, axis=1)
-        assert not isinstance(dy_ds, list)
-
-        d2y_ds2 = jnp.gradient(dy_ds, ds, axis=1)
-        assert not isinstance(d2y_ds2, list)
-
-        # generate derivatives
-        dy_dt = a * d2y_ds2
-
-        full_dy_dt = jnp.pad(dy_dt, ((0, 0), (1, 1)))
-
-        return full_dy_dt
-
-    return diffusion_model
-
-
-PHYS_MODELS: dict[str, Callable[[jax.Array], Callable[..., jax.Array]]] = {
-    "pendulum": lambda _: pendulum_model,
-    "diffusion": make_diffusion_model,
-}
-NUM_PHYS_PARAMS = {
-    "pendulum": 1,
-    "diffusion": 1,
-}
-NUM_DERIVATIVES = {
-    "pendulum": 2,
-    "diffusion": 1,
-}
-SOLVERS = {"euler": Euler}
 
 
 def gen_selections(n_pre_elms: int, n_post_elms: int) -> tuple[jax.Array, jax.Array]:
@@ -273,7 +197,7 @@ class PhysDecoder(nnx.Module):
         self.integral_level = integral_level
         self.t_span = t_span
         self.num_grid_points = num_grid_points
-        self.num_derivatives = NUM_DERIVATIVES.get(system, 1)
+        _, _, self.num_derivatives = get_physics_model(system)
 
         self.data_dim = self.time_dim * self.num_grid_points
         self.ode_dim = self.num_grid_points * self.num_derivatives
@@ -292,7 +216,7 @@ class PhysDecoder(nnx.Module):
             func = make_mlp(
                 func_cfg.latent_dim + self.ode_dim + 1,
                 func_cfg.dims,
-                self.num_grid_points,  # TODO: this may need to be L*D
+                self.num_grid_points,
                 func_cfg.act,
                 rngs=rngs,
             )
@@ -319,15 +243,9 @@ class PhysDecoder(nnx.Module):
         else:
             ds = 0.0
 
-        self.physics_model = PHYS_MODELS.get(system, lambda _: None)(
-            jnp.array(ds, dtype=jnp.float32)
-        )
-        if self.physics_model is None:
-            raise NotImplementedError(f"Physics model {system} is not implemented.")
-
-        self.solver = SOLVERS.get(ode_solver, None)
-        if self.solver is None:
-            raise NotImplementedError(f"ODE solver {system} is not implemented.")
+        physics_model, _, self.num_derivatives = get_physics_model(system)
+        self.physics_model = physics_model(jnp.array(ds))
+        self.solver = get_solver(ode_solver)
 
         self.mask = gen_mask(self.pre_combs * self.post_combs)
 
@@ -383,7 +301,6 @@ class PhysDecoder(nnx.Module):
                                 axis=1,
                             )
                         ),
-                        # TODO: this allows only control over a single derivative. Is this best?
                         ((0, 0), (self.ode_dim - self.num_grid_points, 0)),
                     )
 
@@ -495,7 +412,7 @@ class PhysDecoder(nnx.Module):
             ys_dot_aux = jnp.zeros_like(ys_dot_phys)
 
             # selections : (n, 1), z_aux : (B, Z)
-            for z_aux, pre_func, selections in zip(
+            for z_aux, pre_func, _ in zip(
                 latents[: len(self.pre_funcs)], self.pre_funcs, self.pre_selections
             ):
                 ys_dot_aux += jnp.pad(
@@ -505,7 +422,6 @@ class PhysDecoder(nnx.Module):
                             axis=1,
                         )
                     ),
-                    # TODO: this allows only control over a single derivative. Is this best?
                     ((0, 0), (self.ode_dim - self.num_grid_points, 0)),
                 )
 
@@ -570,10 +486,9 @@ class PhysVAE(nnx.Module):
             0.0, self.integral_step * (self.integral_len - 1), self.integral_len
         )
         self.num_grid_points = cfg.num_grid_points
-        self.ode_dim = self.num_grid_points * NUM_DERIVATIVES.get(cfg.system, 1)
+        _, num_phys_params, num_derivatives = get_physics_model(cfg.system)
+        self.ode_dim = self.num_grid_points * num_derivatives
         self.data_dim = self.num_grid_points * cfg.time_dim
-
-        num_phys_params = NUM_PHYS_PARAMS[cfg.system]
 
         assert len(range(0, self.integral_len, self.integral_level)) == cfg.time_dim, (
             f"Time dimension and integral steps not compatible {len(range(0, self.integral_len, self.integral_level))} != {cfg.time_dim}"
