@@ -6,6 +6,7 @@ from utils.config.modules import ConvConfig, LinearConfig, MaxPoolConfig, UpSamp
 from .conv import make_conv
 from .linear import make_linear
 from .max_pool import make_max_pool
+from .small_resnet_block import SmallResnetBlock
 from .upsample import make_upsample
 
 MODULES = {
@@ -49,4 +50,7 @@ def make_module(name: str, cfg: dict, out_features: int, *, rngs: nnx.Rngs) -> M
     raise KeyError(f"Module type {name} not found")
 
 
-__all__ = ["make_module"]
+__all__ = [
+    "make_module",
+    "SmallResnetBlock",
+]

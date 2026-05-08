@@ -8,15 +8,86 @@ from models.ddim import DDIM
 from models.paid import PAID
 from models.utils import remove_padding
 
-Carry = tuple[DDIM | PAID, jax.Array, jax.Array]
+Carry = tuple[DDIM | PAID, jax.Array, jax.Array, jax.Array]
 
 
-def make_step(
+def make_ddim_step(
+    n_samples: int,
+    condition: int = 0,
+    estimation_type: str = "noise",
+) -> Callable[[Carry, jax.Array], tuple[Carry, jax.Array]]:
+    """
+    Create the generation step keeping the number of samples and shape constant.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of image samples
+    shape : (int, int, int)
+        The shape of the images
+    condition : int
+        How much of the data is fixed, i.e. conditioned on
+    estimation_type : str ("noise", "clean")
+        The type of estimation the model makes
+
+    Returns
+    -------
+    step
+        Function to be used in jax scan
+    """
+
+    if estimation_type not in ["noise", "clean"]:
+        raise NotImplementedError(f"Estimation type {estimation_type} not implemented.")
+
+    # noise_est = estimation_type == "noise"
+
+    assert condition >= 0, "Condition period must be positive"
+
+    def step(carry: Carry, value: jax.Array) -> tuple[Carry, jax.Array]:
+        model, next, curr_alpha, key = carry
+        alpha_raw, step = jnp.split(value, 2, axis=0)
+        next_alpha = alpha_raw.reshape(-1, 1, 1, 1)
+
+        assert condition < next.shape[1], (
+            f"Condition period must be shorter than provided data, {condition} >= {next.shape[1]}"
+        )
+
+        noise_pred = model(
+            jnp.pad(next, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
+            step * jnp.ones(n_samples),
+        )
+        clean_pred = (next - (jnp.sqrt(1 - curr_alpha) * noise_pred)) / jnp.sqrt(
+            curr_alpha
+        )
+        curr = jnp.sqrt(next_alpha) * clean_pred + jnp.sqrt(1 - next_alpha) * noise_pred
+
+        # noisy_x = prev * jnp.sqrt(alpha) + noise * jnp.sqrt(1 - alpha)
+        # x = jnp.concatenate([prev[:, :condition], noisy_x[:, condition:]], axis=1)
+
+        # pred = remove_padding(pred, model.pad)
+
+        # if noise_est:
+        #     denoised = (x - pred * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
+        #     curr = jnp.concatenate(
+        #         [prev[:, :condition], denoised[:, condition:]], axis=1
+        #     )
+        # else:
+        #     curr = jnp.concatenate([prev[:, :condition], pred[:, condition:]], axis=1)
+
+        return (model, curr, next_alpha, key), clean_pred
+
+    return step
+
+
+DDPMCarry = tuple[DDIM | PAID, jax.Array, jax.Array]
+
+
+def make_ddpm_step(
     n_samples: int,
     shape: tuple[int, ...],
     condition: int = 0,
     estimation_type: str = "noise",
-) -> Callable[[Carry, jax.Array], tuple[Carry, jax.Array]]:
+) -> Callable[[DDPMCarry, jax.Array], tuple[DDPMCarry, jax.Array]]:
     """
     Create the generation step keeping the number of samples and shape constant.
 
@@ -44,7 +115,7 @@ def make_step(
 
     assert condition >= 0, "Condition period must be positive"
 
-    def step(carry: Carry, value: jax.Array) -> tuple[Carry, jax.Array]:
+    def step(carry: DDPMCarry, value: jax.Array) -> tuple[DDPMCarry, jax.Array]:
         model, prev, key = carry
         alpha_raw, step = jnp.split(value, 2, axis=0)
 
@@ -116,18 +187,27 @@ def generate_images(
     img_shape = array_like.shape[1:]
     n_samples = array_like.shape[0]
 
-    steps = jnp.linspace(999, 0, 100, dtype=int)
+    steps = jnp.linspace(model.num_timesteps - 1, 0, 100, dtype=int)
+
     alphas = (1 - model.betas).cumprod(axis=0)[steps]
-    values = jnp.concatenate([alphas[:, None], steps[:, None]], axis=1)
+    curr_alpha = alphas[0].reshape(-1, 1, 1, 1)
+    next_alphas = jnp.concatenate(
+        [alphas[1:], alphas[0, None]], axis=0
+    )  # Last alpha unused
 
-    init = (model, array_like.copy(), key)
+    values = jnp.concatenate([next_alphas[:, None], steps[:, None]], axis=1)
 
-    gen_step = make_step(
-        n_samples, img_shape, condition=condition, estimation_type=estimation_type
+    key, noise_key = jax.random.split(key, 2)
+    noise = jax.random.normal(noise_key, shape=(n_samples, *img_shape))
+
+    init = (model, noise, curr_alpha, key)
+
+    gen_step = make_ddim_step(
+        n_samples, condition=condition, estimation_type=estimation_type
     )
     _, images = jax.lax.scan(gen_step, init, values)
 
-    return images[-1]
+    return images[:, 0]
 
 
 def generate_mnist(

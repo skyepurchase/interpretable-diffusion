@@ -12,6 +12,7 @@ from jaxtyping import PyTree
 
 from models.ddim import compute_betas
 from models.mlp import make_mlp
+from models.modules import SmallResnetBlock
 from models.modules.acts import ACTS
 from models.phys_vae import gen_selections
 from models.physics_models import get_physics_model, get_solver
@@ -88,7 +89,7 @@ class PhysUNet2D(nnx.Module):
         for aux_cfg in cfg.aux_funcs:
             flat_dim = flat_dim_base * aux_cfg.features
             aux_func = nnx.Sequential(
-                ResnetBlock(
+                SmallResnetBlock(
                     unet_latent_features,
                     aux_cfg.features,
                     ACTS[aux_cfg.act],
@@ -147,7 +148,7 @@ class PhysUNet2D(nnx.Module):
         for phys_cfg, param_range in zip(cfg.phys_funcs, cfg.pde.phys_param_ranges):
             flat_dim = flat_dim_base * phys_cfg.features
             phys_func = nnx.Sequential(
-                ResnetBlock(
+                SmallResnetBlock(
                     unet_latent_features,
                     phys_cfg.features,
                     ACTS[phys_cfg.act],
