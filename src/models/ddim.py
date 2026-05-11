@@ -7,7 +7,7 @@ from models.modules.acts import ACTS
 from utils.config.models import DDIMConfig
 
 
-def compute_betas(
+def compute_alphas(
     schedule: str, beta_start: float, beta_end: float, num_timesteps: int
 ) -> jax.Array:
     """
@@ -16,7 +16,7 @@ def compute_betas(
     Parameters
     ----------
     schedule : str
-        The schedule to create betas
+        The schedule to create alphas
     beta_start : float
         Inclusive beta start value
     beta_end : float
@@ -25,7 +25,11 @@ def compute_betas(
         The number of timesteps used in training
     """
     if schedule == "linear":
-        return jnp.linspace(beta_start, beta_end, num_timesteps)
+        return (1 - jnp.linspace(beta_start, beta_end, num_timesteps)).cumprod(0)
+    if schedule == "cosine":
+        return jnp.clip(
+            (jnp.cos(jnp.linspace(0, 1, num_timesteps) * jnp.pi) + 1) / 2, 1e-6, 1
+        )
 
     raise NotImplementedError(f"{schedule} schedule not implemented.")
 
@@ -44,7 +48,7 @@ class DDIM(nnx.Module):
 
     def __init__(self, cfg: DDIMConfig, rngs: nnx.Rngs) -> None:
         self.num_timesteps = cfg.num_timesteps
-        self.betas = compute_betas(
+        self.alphas = compute_alphas(
             cfg.beta_schedule, cfg.beta_start, cfg.beta_end, self.num_timesteps
         )
 

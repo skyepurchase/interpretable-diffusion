@@ -138,7 +138,7 @@ def loss_fn(
     )
     tau = jnp.concatenate([tau, model.num_timesteps - tau - 1], axis=0)[:batch_size]
 
-    alpha = (1 - model.betas).cumprod(axis=0)[tau].reshape(-1, 1, 1, 1)
+    alpha = model.alphas[tau].reshape(-1, 1, 1, 1)
     noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
     x = jnp.concatenate(
         [data[:, : model.condition], noisy_x[:, model.condition :]], axis=1

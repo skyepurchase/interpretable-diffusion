@@ -14,7 +14,7 @@ def noise_estimation_loss(
     data: jax.Array,
     t: jax.Array,
     noise: jax.Array,
-    betas: jax.Array,
+    alphas: jax.Array,
     condition: int = 0,
 ) -> jax.Array:
     """
@@ -31,7 +31,7 @@ def noise_estimation_loss(
         f"Condition period must be less the width of the data, {condition} >= {data.shape[1]}"
     )
 
-    alpha = (1 - betas).cumprod(axis=0)[t].reshape(-1, 1, 1, 1)
+    alpha = alphas[t].reshape(-1, 1, 1, 1)
     noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
     x = jnp.concatenate([data[:, :condition], noisy_x[:, condition:]], axis=1)
     eps = model(jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), t)
@@ -76,7 +76,6 @@ def train_step(
         data = jnp.expand_dims(data, 3)
 
     batch_size = data.shape[0]
-    betas = model.betas
 
     key, time_key, noise_key = split(key, num=3)
     noise = jax.random.normal(noise_key, data.shape)
@@ -87,7 +86,7 @@ def train_step(
     t = jnp.concatenate([t, model.num_timesteps - t - 1], axis=0)[:batch_size]
 
     loss, grads = nnx.value_and_grad(noise_estimation_loss)(
-        model, data, t, noise, betas
+        model, data, t, noise, model.alphas
     )
     optimizer.update(model, grads)
 

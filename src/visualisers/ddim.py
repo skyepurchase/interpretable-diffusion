@@ -4,15 +4,17 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from models.ddim import DDIM
+from models.ddim import DDIM, compute_alphas
 from models.paid import PAID
 from models.utils import remove_padding
 
 Carry = tuple[DDIM | PAID, jax.Array, jax.Array, jax.Array]
+DDPMCarry = tuple[DDIM | PAID, jax.Array, jax.Array]
 
 
 def make_ddim_step(
     n_samples: int,
+    shape: tuple[int, ...],
     condition: int = 0,
     estimation_type: str = "noise",
 ) -> Callable[[Carry, jax.Array], tuple[Carry, jax.Array]]:
@@ -35,6 +37,7 @@ def make_ddim_step(
     step
         Function to be used in jax scan
     """
+    print("Using DDIM\n")
 
     if estimation_type not in ["noise", "clean"]:
         raise NotImplementedError(f"Estimation type {estimation_type} not implemented.")
@@ -44,42 +47,32 @@ def make_ddim_step(
     assert condition >= 0, "Condition period must be positive"
 
     def step(carry: Carry, value: jax.Array) -> tuple[Carry, jax.Array]:
-        model, next, curr_alpha, key = carry
-        alpha_raw, step = jnp.split(value, 2, axis=0)
-        next_alpha = alpha_raw.reshape(-1, 1, 1, 1)
+        model, x_t, alpha_t, key = carry
+        alpha_raw, t = jnp.split(value, 2, axis=0)
+        alpha_tm = alpha_raw.reshape(-1, 1, 1, 1)
 
-        assert condition < next.shape[1], (
-            f"Condition period must be shorter than provided data, {condition} >= {next.shape[1]}"
+        assert condition < x_t.shape[1], (
+            f"Condition period must be shorter than provided data, {condition} >= {x_t.shape[1]}"
         )
 
-        noise_pred = model(
-            jnp.pad(next, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
-            step * jnp.ones(n_samples),
+        pred_noise = model(
+            jnp.pad(x_t, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
+            t * jnp.ones(n_samples),
         )
-        clean_pred = (next - (jnp.sqrt(1 - curr_alpha) * noise_pred)) / jnp.sqrt(
-            curr_alpha
-        )
-        curr = jnp.sqrt(next_alpha) * clean_pred + jnp.sqrt(1 - next_alpha) * noise_pred
+        pred_noise = remove_padding(pred_noise, model.pad)
 
-        # noisy_x = prev * jnp.sqrt(alpha) + noise * jnp.sqrt(1 - alpha)
-        # x = jnp.concatenate([prev[:, :condition], noisy_x[:, condition:]], axis=1)
+        x_0_hat = (x_t - (pred_noise * jnp.sqrt(1.0 - alpha_t))) / jnp.sqrt(alpha_t)
 
-        # pred = remove_padding(pred, model.pad)
+        # key, noise_key = jax.random.split(key, 2)
+        # noise = jax.random.normal(noise_key, shape=(n_samples, *shape))
 
-        # if noise_est:
-        #     denoised = (x - pred * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
-        #     curr = jnp.concatenate(
-        #         [prev[:, :condition], denoised[:, condition:]], axis=1
-        #     )
-        # else:
-        #     curr = jnp.concatenate([prev[:, :condition], pred[:, condition:]], axis=1)
+        # sigma_t = jnp.sqrt((1 - alpha_tm) / (1 - alpha_t)) * jnp.sqrt(1 - (alpha_t / alpha_tm))
 
-        return (model, curr, next_alpha, key), clean_pred
+        x_tm = (x_0_hat * jnp.sqrt(alpha_tm)) + (pred_noise * jnp.sqrt(1 - alpha_tm))
+
+        return (model, x_tm, alpha_tm, key), x_tm
 
     return step
-
-
-DDPMCarry = tuple[DDIM | PAID, jax.Array, jax.Array]
 
 
 def make_ddpm_step(
@@ -107,6 +100,7 @@ def make_ddpm_step(
     step
         Function to be used in jax scan
     """
+    print("Using DDPM\n")
 
     if estimation_type not in ["noise", "clean"]:
         raise NotImplementedError(f"Estimation type {estimation_type} not implemented.")
@@ -130,19 +124,21 @@ def make_ddpm_step(
         noisy_x = prev * jnp.sqrt(alpha) + noise * jnp.sqrt(1 - alpha)
         x = jnp.concatenate([prev[:, :condition], noisy_x[:, condition:]], axis=1)
 
-        pred = model(
+        pred_noise = model(
             jnp.pad(x, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
             step * jnp.ones(n_samples),
         )
-        pred = remove_padding(pred, model.pad)
+        pred_noise = remove_padding(pred_noise, model.pad)
 
         if noise_est:
-            denoised = (x - pred * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
+            denoised = (x - pred_noise * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
             curr = jnp.concatenate(
                 [prev[:, :condition], denoised[:, condition:]], axis=1
             )
         else:
-            curr = jnp.concatenate([prev[:, :condition], pred[:, condition:]], axis=1)
+            curr = jnp.concatenate(
+                [prev[:, :condition], pred_noise[:, condition:]], axis=1
+            )
 
         return (model, curr, key), curr
 
@@ -189,11 +185,10 @@ def generate_images(
 
     steps = jnp.linspace(model.num_timesteps - 1, 0, 100, dtype=int)
 
-    alphas = (1 - model.betas).cumprod(axis=0)[steps]
+    alphas = model.alphas[steps]
+    alphas = compute_alphas("cosine", 0, 0, model.num_timesteps)[steps]
     curr_alpha = alphas[0].reshape(-1, 1, 1, 1)
-    next_alphas = jnp.concatenate(
-        [alphas[1:], alphas[0, None]], axis=0
-    )  # Last alpha unused
+    next_alphas = jnp.concatenate([alphas[1:], jnp.ones(1)], axis=0)
 
     values = jnp.concatenate([next_alphas[:, None], steps[:, None]], axis=1)
 
@@ -203,11 +198,11 @@ def generate_images(
     init = (model, noise, curr_alpha, key)
 
     gen_step = make_ddim_step(
-        n_samples, condition=condition, estimation_type=estimation_type
+        n_samples, shape=img_shape, condition=condition, estimation_type=estimation_type
     )
     _, images = jax.lax.scan(gen_step, init, values)
 
-    return images[:, 0]
+    return images[:, 1]
 
 
 def generate_mnist(

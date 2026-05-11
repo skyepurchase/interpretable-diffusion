@@ -10,7 +10,7 @@ from diffuse.neural_network.nn import CondUNet2D
 from flax import nnx
 from jaxtyping import PyTree
 
-from models.ddim import compute_betas
+from models.ddim import compute_alphas
 from models.mlp import make_mlp
 from models.modules import SmallResnetBlock
 from models.modules.acts import ACTS
@@ -554,7 +554,7 @@ class PAID(nnx.Module):
     def __init__(self, cfg: PAIDConfig, rngs: nnx.Rngs) -> None:
         # Diffusion constants
         self.num_timesteps = cfg.num_timesteps
-        self.betas = compute_betas(
+        self.alphas = compute_alphas(
             cfg.beta_schedule, cfg.beta_start, cfg.beta_end, self.num_timesteps
         )
 
