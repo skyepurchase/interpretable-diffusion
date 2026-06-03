@@ -193,7 +193,7 @@ class PhysUNet2D(nnx.Module):
                 ),
                 nnx.GroupNorm(
                     num_features=func_cfg.features,
-                    num_groups=32,
+                    num_groups=8,
                     rngs=rngs,
                 ),
                 nnx.Conv(

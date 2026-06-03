@@ -155,10 +155,16 @@ def loss_fn(
     reconstruction_loss = (
         jnp.square((data - x_hat[-1])[:, model.condition :]).sum(axis=(1, 2, 3)).mean()
     )
-    phys_loss = model.beta * (
-        jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen))
-        .sum(axis=(1, 2, 3))
-        .mean()
+
+    phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen)).sum(axis=3)
+    phys_loss = (
+        model.beta
+        * (
+            phys_error[:, : model.condition].sum(axis=(1, 2))
+            + (jnp.reshape(alpha, (-1, 1, 1)) * phys_error[:, model.condition :]).sum(
+                axis=(1, 2)
+            )
+        ).mean()
     )
 
     disc_loss = model.alpha * discrepancy_loss(x_hat)
