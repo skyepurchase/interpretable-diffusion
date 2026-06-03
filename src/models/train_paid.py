@@ -158,7 +158,7 @@ def loss_fn(
 
     phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen)).sum(axis=3)
     phys_loss = (
-        model.beta
+        model.phys_reg
         * (
             phys_error[:, : model.condition].sum(axis=(1, 2))
             + (jnp.reshape(alpha, (-1, 1, 1)) * phys_error[:, model.condition :]).sum(
@@ -167,10 +167,10 @@ def loss_fn(
         ).mean()
     )
 
-    disc_loss = model.alpha * discrepancy_loss(x_hat)
+    disc_loss = model.disc_reg * discrepancy_loss(x_hat)
 
     key, aug_key = jax.random.split(key, 2)
-    aug_loss = model.gamma * augmentation_loss(
+    aug_loss = model.aug_reg * augmentation_loss(
         model, phys_params, data[:, 0, :, 0], tau, key=aug_key
     )
 

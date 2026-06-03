@@ -136,13 +136,11 @@ if __name__ == "__main__":
 
     train_step, loss_labels = get_trainer(config.model)
 
-    config_version = args.config.split("/")[-1].split(".")[0]
     run_name = "_".join(
         [
             config.model,
             config.dataset,
             config.dataset_config.get("system", ""),
-            config_version,
         ]
     )
     run_name = run_name.replace("__", "_")

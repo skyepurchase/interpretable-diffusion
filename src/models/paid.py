@@ -558,9 +558,9 @@ class PAID(nnx.Module):
         )
 
         # Training constants
-        self.alpha = cfg.alpha
-        self.beta = cfg.beta
-        self.gamma = cfg.gamma
+        self.disc_reg = cfg.disc_reg
+        self.phys_reg = cfg.phys_reg
+        self.aug_reg = cfg.aug_reg
 
         # Physics constants + functions
         self.integral_level = cfg.pde.integral_level
