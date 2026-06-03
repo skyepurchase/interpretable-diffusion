@@ -1,3 +1,4 @@
+import time
 from argparse import ArgumentParser
 from collections import defaultdict
 from datetime import datetime
@@ -6,6 +7,7 @@ from typing import Optional
 import jax
 import optax
 import trackio
+import yaml
 from flax import nnx
 from jax.random import PRNGKey, split
 from torch.utils.data import DataLoader
@@ -20,6 +22,18 @@ from utils.misc import TrainStep
 NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 
 
+def format_time(seconds):
+    """Convert seconds into reasonable precision"""
+    if seconds < 180:
+        return f"{seconds:.2f} seconds"
+    elif seconds < 7200:
+        return f"{seconds / 60:.2f} minutes"
+    elif seconds < 86400:
+        return f"{seconds / 3600:.2f} hours"
+    else:
+        return f"{seconds / 86400:.2f} days?!?!"
+
+
 def train(
     model: nnx.Module,
     train_step: TrainStep,
@@ -28,6 +42,7 @@ def train(
     key: jax.Array,
     loss_labels: Optional[list[str]] = None,
     run: str = "",
+    config_string: str = "",
 ):
     """
     Train a model given a dataset loader.
@@ -46,6 +61,8 @@ def train(
         The labels for each loss term
     run : str = ""
         The name of the current run
+    config_string : str = ""
+        The model config
     """
     trackio.init(
         project="Interpretable Diffusion",
@@ -60,7 +77,9 @@ def train(
 
     optimizer = nnx.Optimizer(model, optax.adam(cfg.lr, eps=cfg.eps), wrt=nnx.Param)
 
+    final_loss = 0
     pbar = tqdm(range(cfg.epochs), desc="Training")
+    start = time.perf_counter()
     for _ in pbar:
         running_loss = defaultdict(float)
 
@@ -81,6 +100,19 @@ def train(
         trackio.log(running_loss)
 
         pbar.set_description(f"Training, loss={running_loss['loss']:.2f}")
+        final_loss = running_loss["loss"]
+    end = time.perf_counter()
+
+    report = f"""# Training report
+- Final loss: {final_loss}
+- Train time: {format_time(end - start)}
+
+## Model config
+```yaml
+{config_string}
+```
+    """
+    trackio.log({"training_report": trackio.Markdown(report)})
 
     trackio.finish()
 
@@ -98,6 +130,7 @@ if __name__ == "__main__":
     train_loader, val_loader, test_loader = get_dataset(
         config.dataset, config.dataset_config
     )
+    config_string = yaml.dump(config.model_config, indent=4)
 
     model = make_model(config.model, config.model_config, rngs=rngs)
 
@@ -123,6 +156,7 @@ if __name__ == "__main__":
         subkey,
         loss_labels=loss_labels,
         run=run_name,
+        config_string=config_string,
     )
 
     save_model(model, config.checkpoint_dir)
