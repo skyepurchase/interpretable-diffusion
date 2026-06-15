@@ -113,7 +113,7 @@ class PDEConfig:
     timestep: float
     solver: str
     integral_level: int
-    length: float = 0.0
+    spatial_length: float = 0.0
     num_grid_points: int = 1
 
 
@@ -133,9 +133,9 @@ class PAIDConfig:
     beta_start: float
     beta_end: float
 
-    alpha: float
-    beta: float
-    gamma: float
+    disc_reg: float
+    phys_reg: float
+    aug_reg: float
 
     condition: int = 5
     pad: list[tuple] = field(default_factory=lambda: [(0, 0), (0, 0)])

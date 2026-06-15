@@ -13,7 +13,8 @@ from jaxtyping import PyTree
 from models.ddim import compute_betas
 from models.mlp import make_mlp
 from models.modules.acts import ACTS
-from models.phys_vae import NUM_DERIVATIVES, PHYS_MODELS, SOLVERS, gen_selections
+from models.phys_vae import gen_selections
+from models.physics_models import get_physics_model, get_solver
 from models.utils import remove_padding
 from utils.config.models import PAIDConfig
 
@@ -79,8 +80,13 @@ class PhysUNet2D(nnx.Module):
 
         # Auxiliary functions
         aux_dims = []
+        halving = 2 ** (len(cfg.unet.feature_multiples) - 1)
+        flat_dim_base = ((self.num_grid_points + sum(self.pad[1])) // halving) * (
+            (self.time_dim + sum(self.pad[0])) // halving
+        )
         self.aux_funcs = nnx.List()
         for aux_cfg in cfg.aux_funcs:
+            flat_dim = flat_dim_base * aux_cfg.features
             aux_func = nnx.Sequential(
                 ResnetBlock(
                     unet_latent_features,
@@ -93,7 +99,7 @@ class PhysUNet2D(nnx.Module):
                 ),
                 ACTS[aux_cfg.act],
                 lambda x: x.reshape(x.shape[0], -1),
-                nnx.Linear(aux_cfg.in_features, aux_cfg.latent_dim, rngs=rngs),
+                nnx.Linear(flat_dim, aux_cfg.latent_dim, rngs=rngs),
             )
             self.aux_funcs.append(aux_func)
             aux_dims.append(aux_cfg.latent_dim)
@@ -139,6 +145,7 @@ class PhysUNet2D(nnx.Module):
         )
         self.phys_funcs = nnx.List()
         for phys_cfg, param_range in zip(cfg.phys_funcs, cfg.pde.phys_param_ranges):
+            flat_dim = flat_dim_base * phys_cfg.features
             phys_func = nnx.Sequential(
                 ResnetBlock(
                     unet_latent_features,
@@ -151,7 +158,7 @@ class PhysUNet2D(nnx.Module):
                 ),
                 ACTS[phys_cfg.act],
                 lambda x: x.reshape(x.shape[0], -1),
-                nnx.Linear(phys_cfg.in_features, phys_cfg.latent_dim, rngs=rngs),
+                nnx.Linear(flat_dim, phys_cfg.latent_dim, rngs=rngs),
                 nnx.sigmoid,
                 lambda x: x
                 * ((2 * param_range[1]) - (param_range[0] / 2) + (param_range[0] / 2)),
@@ -186,7 +193,7 @@ class PhysUNet2D(nnx.Module):
                 ),
                 nnx.GroupNorm(
                     num_features=func_cfg.features,
-                    num_groups=32,
+                    num_groups=8,
                     rngs=rngs,
                 ),
                 nnx.Conv(
@@ -390,7 +397,7 @@ class PhysUNet2D(nnx.Module):
             reps=(pre_combs, 1),
         )
 
-        # y_seq : ^(S, B*n, X*D)
+        # y_seq : ^(T, B*n, X*D)
         y_seq = diffeqsolve(
             ODETerm(PDE),
             self.solver(),
@@ -402,15 +409,12 @@ class PhysUNet2D(nnx.Module):
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
 
-        # trim_y_seq : ^(T, B*n, X*D)
-        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
-
         # phys_x_hat : ^(n, B, T, X, 1)
         phys_x_hat = jnp.expand_dims(
             # ^(n, B, T, X)
             jnp.reshape(
                 # ^(T, B*n, X*D) => ^(B*n, T, X)
-                jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
+                jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
                 (pre_combs, -1, self.time_dim, self.num_grid_points),
             ),
             axis=-1,
@@ -464,6 +468,14 @@ class PhysUNet2D(nnx.Module):
         x_hat : Array (B, W, H, C) padded
             Estimation of the clean x
         """
+        assert x.shape[1:] == (
+            self.time_dim + sum(self.pad[0]),
+            self.num_grid_points + sum(self.pad[1]),
+            1,
+        ), (
+            f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, {self.num_grid_points + sum(self.pad[1])}, 1)"
+        )
+
         x_hat, aux_latents, phys_latents, _ = self._embed(x, tau)
 
         # x_hat : (1, B, T, X, 1)
@@ -480,7 +492,7 @@ class PhysUNet2D(nnx.Module):
 
     def full_forward(
         self, x: jax.Array, tau: jax.Array
-    ) -> tuple[jax.Array, jax.Array, jax.Array, list[jax.Array]]:
+    ) -> tuple[jax.Array, jax.Array, list[jax.Array]]:
         """
         TODO: Add docstring
 
@@ -497,11 +509,17 @@ class PhysUNet2D(nnx.Module):
             Estimation of clean signal using combinations of auxiliary functions
         phys_sig : Array (B, W, H, C) padded
             Estimation of the known physics signal
-        gen_phys : Array (B, W, H, C) padded
-            The physics generated from estimated parameters
         phys_params : list[Array (B, Z)]
             Estimation of physics parameters
         """
+        assert x.shape[1:] == (
+            self.time_dim + sum(self.pad[0]),
+            self.num_grid_points + sum(self.pad[1]),
+            1,
+        ), (
+            f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, {self.num_grid_points + sum(self.pad[1])}, 1)"
+        )
+
         # x_hat : (B, T, X, 1)
         h, aux_latents, phys_params, phys_sig = self._embed(x, tau)
 
@@ -523,9 +541,8 @@ class PhysUNet2D(nnx.Module):
             "Internal issue with generation should return all combinations."
         )
 
-        gen_phys = x_hat[0]
-        # x_hat: (m, B, T, X, 1), phys_sig : (B, T, X, 1), gen_phys : (B, T, X, 1), phys_params : (B, Z)
-        return x_hat, phys_sig, gen_phys, phys_params
+        # x_hat: (m, B, T, X, 1), phys_sig : (B, T, X, 1), phys_params : (B, Z)
+        return x_hat, phys_sig, phys_params
 
 
 class PAID(nnx.Module):
@@ -541,41 +558,28 @@ class PAID(nnx.Module):
         )
 
         # Training constants
-        self.alpha = cfg.alpha
-        self.beta = cfg.beta
-        self.gamma = cfg.gamma
+        self.disc_reg = cfg.disc_reg
+        self.phys_reg = cfg.phys_reg
+        self.aug_reg = cfg.aug_reg
 
         # Physics constants + functions
         self.integral_level = cfg.pde.integral_level
-        self.integral_len = (cfg.pde.time_dim - 1) * self.integral_level + 1
-        self.integral_step = cfg.pde.timestep / float(self.integral_level)
-        self.t_span = jnp.linspace(
-            0.0, self.integral_step * (self.integral_len - 1), self.integral_len
-        )
-
-        self.t1 = self.integral_len
-        self.dt = self.integral_step
-        self.num_grid_points = cfg.pde.num_grid_points
-        self.pde_dim = self.num_grid_points * NUM_DERIVATIVES.get(cfg.pde.system, 1)
         self.time_dim = cfg.pde.time_dim
 
+        self.dt = cfg.pde.timestep / float(self.integral_level)
+        self.t1 = (self.time_dim - 1) * self.dt
+        self.t_span = jnp.linspace(0.0, self.t1, self.time_dim)
+
+        self.num_grid_points = cfg.pde.num_grid_points
         if self.num_grid_points > 1:
-            ds = cfg.pde.length / (self.num_grid_points - 1)
+            ds = cfg.pde.spatial_length / (self.num_grid_points - 1)
         else:
             ds = 0.0
 
-        # PDE solver functions
-        if cfg.pde.system not in PHYS_MODELS:
-            raise NotImplementedError(
-                f"Physics model {cfg.pde.system} is not implemented."
-            )
-        self.physics_model = PHYS_MODELS.get(cfg.pde.system, lambda _: None)(
-            jnp.array(ds, dtype=jnp.float32)
-        )
-
-        if cfg.pde.solver not in SOLVERS:
-            raise NotImplementedError(f"Solver {cfg.pde.solver} is not implemented.")
-        self.solver = SOLVERS.get(cfg.pde.solver)
+        physics_model, _, num_derivatives = get_physics_model(cfg.pde.system)
+        self.pde_dim = self.num_grid_points * num_derivatives
+        self.physics_model = physics_model(jnp.array(ds))
+        self.solver = get_solver(cfg.pde.solver)
 
         assert self.physics_model is not None
         assert self.solver is not None
@@ -625,9 +629,9 @@ class PAID(nnx.Module):
             """Internal PDE to be solved during the generation process."""
             # y : (B*n, X*D)
             assert len(y.shape) == 2, f"expected (B, X*D) but received {y.shape}"
-            # assert y.shape[1] == self.pde_dim, (
-            #     f"Expected (B, {self.pde_dim}) but received {y.shape}"
-            # )
+            assert y.shape[1] == self.pde_dim, (
+                f"Expected (B, {self.pde_dim}) but received {y.shape}"
+            )
 
             return self.physics_model(y, *params)
 
@@ -637,7 +641,7 @@ class PAID(nnx.Module):
             ((0, 0), (0, self.pde_dim - self.num_grid_points)),
         )
 
-        # y_seq : ^(S, B, X*D)
+        # y_seq : ^(T, B, X*D)
         y_seq = diffeqsolve(
             ODETerm(PDE),
             self.solver(),
@@ -649,15 +653,12 @@ class PAID(nnx.Module):
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
 
-        # trim_y_seq : ^(T, B, X*D)
-        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
-
         # gen_phys : ^(B, T, X, 1)
         gen_phys = jnp.expand_dims(
             # ^(B, T, X)
             jnp.reshape(
                 # ^(T, B, X*D) => ^(B, T, X)
-                jnp.permute_dims(trim_y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
+                jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
                 (-1, self.time_dim, self.num_grid_points),
             ),
             axis=-1,

@@ -144,25 +144,33 @@ def loss_fn(
         [data[:, : model.condition], noisy_x[:, model.condition :]], axis=1
     )
 
-    x_hat, phys_hat, phys, phys_params = model.denoiser.full_forward(
+    x_hat, phys_pred, phys_params = model.denoiser.full_forward(
         jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), tau
     )
 
-    phys_hat = remove_padding(phys_hat, model.pad)
-    phys = remove_padding(phys, model.pad)
+    phys_pred = remove_padding(phys_pred, model.pad)
     x_hat = remove_padding(x_hat, [(0, 0)] + model.pad)
+    phys_gen = x_hat[0]
 
     reconstruction_loss = (
         jnp.square((data - x_hat[-1])[:, model.condition :]).sum(axis=(1, 2, 3)).mean()
     )
-    phys_loss = model.beta * (
-        jnp.square(phys_hat - jax.lax.stop_gradient(phys)).sum(axis=(1, 2, 3)).mean()
+
+    phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen)).sum(axis=3)
+    phys_loss = (
+        model.phys_reg
+        * (
+            phys_error[:, : model.condition].sum(axis=(1, 2))
+            + (jnp.reshape(alpha, (-1, 1, 1)) * phys_error[:, model.condition :]).sum(
+                axis=(1, 2)
+            )
+        ).mean()
     )
 
-    disc_loss = model.alpha * discrepancy_loss(x_hat)
+    disc_loss = model.disc_reg * discrepancy_loss(x_hat)
 
     key, aug_key = jax.random.split(key, 2)
-    aug_loss = model.gamma * augmentation_loss(
+    aug_loss = model.aug_reg * augmentation_loss(
         model, phys_params, data[:, 0, :, 0], tau, key=aug_key
     )
 

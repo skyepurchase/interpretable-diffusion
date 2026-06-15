@@ -39,3 +39,15 @@ Both scripts take a seed value with `-s`. `visualise.py` has more option which c
 ```
 uv run src/visualise.py --help
 ```
+
+## PDE Bench
+
+[pdebench](https://github.com/pdebench/PDEBench/) dependencies clash with those of this project. The datasets are therefore downloaded in a separate project targeting the data directory in this repository. The following steps where followed
+
+1. Clone `pdebench` https://github.com/pdebench/PDEBench
+2. `cd` into the directory and `cd pdebench/data_download`
+3. run `uv sync` (you may need to remove the optional dependencies in `pyproject.toml`)
+4. run a command from https://github.com/pdebench/PDEBench/tree/main/pdebench/data_download such as
+```
+python download_direct.py --root_folder <path-to-this-repo>/data/pdebench --pde_name diff_sorp
+```
