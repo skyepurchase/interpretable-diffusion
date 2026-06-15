@@ -130,7 +130,7 @@ if __name__ == "__main__":
     train_loader, val_loader, test_loader = get_dataset(
         config.dataset, config.dataset_config
     )
-    config_string = yaml.dump(config.model_config, indent=4)
+    config_string = yaml.dump(config.model_config, indent=4, sort_keys=False)
 
     model = make_model(config.model, config.model_config, rngs=rngs)
 
