@@ -8,3 +8,7 @@ __pycache__/
 # Large data folders
 data/
 checkpoints/
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
