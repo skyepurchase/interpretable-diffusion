@@ -1,6 +1,7 @@
 from pydantic import ValidationError
 from torch.utils.data import DataLoader
 
+from datasets.burgers import get_burgers
 from utils.config.datasets import DatasetConfig, PDEBenchConfig, PiVAEConfig
 
 from .mnist import get_MNIST
@@ -11,12 +12,14 @@ DATASETS = {
     "mnist": get_MNIST,
     "pivae": get_pivae,
     "pdebench": get_pdebench,
+    "burgers": get_burgers,
 }
 
 CONFIG = {
     "mnist": DatasetConfig,
     "pivae": PiVAEConfig,
     "pdebench": PDEBenchConfig,
+    "burgers": PiVAEConfig,
 }
 
 
