@@ -11,8 +11,6 @@ from tqdm import tqdm
 from datasets.utils import np_collate
 from utils.config.datasets import PiVAEConfig
 
-PRECISION = 1000
-
 
 class PiVAEDataset(Dataset):
     """A wrapper of the torch Dataset for the PiVAE datasets."""
@@ -47,10 +45,10 @@ def pendulum_ODE() -> Callable[[NDArray, NDArray], NDArray]:
     func : (t, y) -> dy
         The function that progresses y according to the ODE.
     """
-    omega = (np.random.randint(0, PRECISION) * (3.14 - 0.785) / PRECISION) + 0.785
-    xi = np.random.randint(0, PRECISION) * 8 / PRECISION
-    phi = (np.random.randint(0, PRECISION) * (6.280 - 3.14) / PRECISION) + 3.14
-    A = np.random.randint(0, PRECISION) * 40 / PRECISION
+    omega = np.random.uniform(low=np.pi / 4, high=np.pi)
+    xi = np.random.uniform(low=0, high=8)
+    phi = np.random.uniform(low=np.pi, high=2 * np.pi)
+    A = np.random.uniform(low=0, high=40)
 
     def force_damped_pendulum(t: NDArray, y: NDArray) -> NDArray:
         theta, theta_dot = y
@@ -88,7 +86,7 @@ def generate_pendulum_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
 
     samples = np.empty((0, 2, steps))
     for _ in tqdm(range(n_samples), desc="Generating samples"):
-        y_0 = (np.random.randint(0, PRECISION) * (1.57 + 1.57) / PRECISION) - 1.57
+        y_0 = np.random.uniform(low=-np.pi / 2, high=np.pi / 2)
         y0 = [y_0, 0]
 
         sol = solve_ivp(
@@ -123,19 +121,17 @@ def diffusion_PDE(ds: float) -> Callable[[NDArray, NDArray], NDArray]:
     func : (t, y) -> dy
         The function that progresses y according to the ODE.
     """
-    a = (np.random.randint(0, PRECISION) * (1e-1 - 1e-2) / PRECISION) + 1e-2
-    b = (np.random.randint(0, PRECISION) * (1e-1 - 1e-2) / PRECISION) + 1e-2
+    a = np.random.uniform(low=0.01, high=0.1)
+    b = np.random.uniform(low=0.01, high=0.1)
 
     def diffusion_advection(t: NDArray, y: NDArray) -> NDArray:
-        interior = y[1:-1]
-
-        dy_ds = np.gradient(interior, ds)
+        dy_ds = np.gradient(y, ds)
         d2y_ds2 = np.gradient(dy_ds, ds)
 
         dy_dt = a * d2y_ds2 - b * dy_ds
 
         dy_dt_full = np.zeros_like(y)
-        dy_dt_full[1:-1] = dy_dt
+        dy_dt_full[1:-1] = dy_dt[1:-1]
 
         return dy_dt_full
 
@@ -167,7 +163,7 @@ def generate_diffusion_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
 
     samples = np.empty((0, H + 1, steps))
     for _ in tqdm(range(n_samples), desc="Generating samples"):
-        c = (np.random.randint(0, PRECISION) * (1.5 - 0.5) / PRECISION) + 0.5
+        c = np.random.uniform(low=0.5, high=1.5)
         y0 = c * np.sin(np.pi * s / s.max())
 
         sol = solve_ivp(
