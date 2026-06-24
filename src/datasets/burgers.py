@@ -109,7 +109,12 @@ def generate_burgers_data(
 
 def get_burgers(cfg: PiVAEConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Create burgers equation train, val, and test dataloaders"""
-    assert cfg.test_split + cfg.validation_split + cfg.train_split <= cfg.n_samples
+    assert cfg.test_split + cfg.validation_split + cfg.train_split <= cfg.n_samples, (
+        "Not enough samples specified for desired splits"
+    )
+
+    t_grid = 128
+    x_grid = 128
 
     if not all(
         [
@@ -117,9 +122,9 @@ def get_burgers(cfg: PiVAEConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
             for file in ["test.npy", "val.npy", "train_pool.npy"]
         ]
     ):
-        samples = generate_burgers_data(cfg.n_samples)
-        assert samples.shape == (cfg.n_samples, 129, 201), (
-            f"Expected shape {(cfg.n_samples, 129, 201)} but received {samples.shape}"
+        samples = generate_burgers_data(cfg.n_samples, t_grid=t_grid, x_grid=x_grid)
+        assert samples.shape == (cfg.n_samples, x_grid + 1, t_grid), (
+            f"Expected shape {(cfg.n_samples, x_grid + 1, t_grid)} but received {samples.shape}"
         )
 
         test = samples[: cfg.test_split]
@@ -144,14 +149,16 @@ def get_burgers(cfg: PiVAEConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
         validation = np.load(os.path.join(cfg.dir, cfg.system, "val.npy"))
         train_pool = np.load(os.path.join(cfg.dir, cfg.system, "train_pool.npy"))
 
-        assert test.shape == (cfg.test_split, test.shape[1], 50), (
-            f"Loaded test set has shape {test.shape} expected {(cfg.test_split, test.shape[1], 50)} according to config"
+        assert test.shape == (cfg.test_split, x_grid + 1, t_grid), (
+            f"Loaded test set has shape {test.shape} expected {(cfg.test_split, x_grid + 1, t_grid)} according to config"
         )
-        assert validation.shape == (cfg.validation_split, validation.shape[1], 50), (
-            f"Loaded validation set has shape {validation.shape} expected {(cfg.validation_split, validation.shape[1], 50)} according to config"
+        assert validation.shape == (cfg.validation_split, x_grid + 1, t_grid), (
+            f"Loaded validation set has shape {validation.shape} expected {(cfg.validation_split, x_grid + 1, t_grid)} according to config"
         )
-        assert train_pool.shape[-1] == 50 and train_pool.shape[0] >= cfg.train_split, (
-            f"Loaded train set has shape {train_pool.shape} expected at least {(cfg.train_split, train_pool.shape[1], 50)} according to config"
+        assert (
+            train_pool.shape[-1] == t_grid and train_pool.shape[0] >= cfg.train_split
+        ), (
+            f"Loaded train set has shape {train_pool.shape} expected at least {(cfg.train_split, x_grid + 1, t_grid)} according to config"
         )
 
     test_dataset = PiVAEDataset(test, cfg.retain_dim)

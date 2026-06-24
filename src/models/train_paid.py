@@ -209,8 +209,12 @@ def train_step(
     if not isinstance(model, PAID):
         raise TypeError(f"Expected model type to be DDIM not {type(model)}")
 
-    if len(data.shape) < 4:
+    if len(data.shape) == 3:
         data = jnp.expand_dims(data, 3)
+    elif len(data.shape) < 3:
+        raise ValueError(
+            f"Data array incorrect shape. Expected 3 or 4 dimensions received {len(data.shape)}"
+        )
 
     (_, losses), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, data, key)
     optimizer.update(model, grads)

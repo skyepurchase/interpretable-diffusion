@@ -66,7 +66,7 @@ def train(
     """
     trackio.init(
         project="Interpretable Diffusion",
-        name=run + "_" + datetime.now().strftime("%m%d-%H%M"),
+        name=run,
         config={
             "epochs": cfg.epochs,
             "learning_rate": cfg.lr,
@@ -141,6 +141,7 @@ if __name__ == "__main__":
             config.model,
             config.dataset,
             config.dataset_config.get("system", ""),
+            datetime.now().strftime("%m%d-%H%M"),
         ]
     )
     run_name = run_name.replace("__", "_")
