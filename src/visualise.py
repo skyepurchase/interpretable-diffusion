@@ -34,6 +34,9 @@ VISUALISER = {
     "pdebench-burgers": {
         "paid": generate_timeseries,
     },
+    "burgers": {
+        "paid": generate_timeseries,
+    },
 }
 
 

@@ -39,7 +39,7 @@ def get_full_dataset_name(dataset: str, config: dict) -> str:
     config: dict
         The dataset config that contains subnames
     """
-    if "system" in config:
+    if "system" in config and config["system"] != "":
         return "-".join([dataset, config["system"]])
     else:
         return dataset
