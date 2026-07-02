@@ -571,10 +571,9 @@ class PAID(nnx.Module):
         self.t_span = jnp.linspace(0.0, self.t1, self.time_dim)
 
         self.num_grid_points = cfg.pde.num_grid_points
+        ds = 0.0
         if self.num_grid_points > 1:
             ds = cfg.pde.spatial_length / (self.num_grid_points - 1)
-        else:
-            ds = 0.0
 
         physics_model, _, num_derivatives = get_physics_model(cfg.pde.system)
         self.pde_dim = self.num_grid_points * num_derivatives

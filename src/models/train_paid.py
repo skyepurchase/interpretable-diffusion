@@ -153,7 +153,8 @@ def loss_fn(
     phys_gen = x_hat[0]
 
     reconstruction_loss = (
-        jnp.square((data - x_hat[-1])[:, model.condition :]).sum(axis=(1, 2, 3)).mean()
+        # Reconstruct the full data to improve smoothness
+        jnp.square((data - x_hat[-1])).sum(axis=(1, 2, 3)).mean()
     )
 
     phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen)).sum(axis=3)
