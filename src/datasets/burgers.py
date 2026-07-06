@@ -61,6 +61,7 @@ def generate_burgers_data(
     T: float = 0.1,
     L: float = 1.0,
     waves: int = 4,
+    p_bars: bool = False,
 ) -> NDArray:
     """
     Using the Burgers equation PDE generate a set of randomly initialised samples.
@@ -69,6 +70,7 @@ def generate_burgers_data(
     ----------
     n_samples : int = 3500
         The number of samples to generate
+    TODO: Finish
 
     Returns
     -------
@@ -80,7 +82,12 @@ def generate_burgers_data(
     ds = s[1] - s[0]
 
     samples = np.empty((0, x_grid + 1, t_grid))
-    for _ in tqdm(range(n_samples), desc="Generating samples"):
+    pbar = (
+        tqdm(range(n_samples), desc="Generating samples")
+        if p_bars
+        else range(n_samples)
+    )
+    for _ in pbar:
         y = np.zeros_like(s)
         for _ in range(2):
             A = np.random.rand()
@@ -135,6 +142,7 @@ def get_burgers(cfg: PiVAEConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
             os.makedirs(os.path.join(cfg.dir, cfg.system))
 
         print("\nSaving generated dataset")
+
         np.save(os.path.join(cfg.dir, cfg.system, "test"), test, allow_pickle=False)
         np.save(
             os.path.join(cfg.dir, cfg.system, "val"), validation, allow_pickle=False

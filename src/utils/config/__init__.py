@@ -39,8 +39,10 @@ def load_config(config_file: PathLike) -> ExperimentConfig:
     config : ExperimentConfig
         The config for the given experiment
     """
+    print("Attempting to load config...")
     try:
         with open(config_file, "r") as file:
+            print(f"Opened config file {config_file}. Attempting to parse...")
             return ExperimentConfig(**yaml.safe_load(file))
     except FileNotFoundError:
         print(f"Provided config file, {config_file} not found")

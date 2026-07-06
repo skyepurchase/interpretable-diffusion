@@ -43,6 +43,7 @@ def train(
     loss_labels: Optional[list[str]] = None,
     run: str = "",
     config_string: str = "",
+    local: bool = False,
 ):
     """
     Train a model given a dataset loader.
@@ -63,66 +64,101 @@ def train(
         The name of the current run
     config_string : str = ""
         The model config
+    local : bool = False
+        Whether the program should output information
     """
-    trackio.init(
-        project="Interpretable Diffusion",
-        name=run,
-        config={
-            "epochs": cfg.epochs,
-            "learning_rate": cfg.lr,
-            # TODO: pass batch_size here
-            "batch_size": next(iter(dataloader))[0].shape[0],
-        },
-    )
+    if local:
+        trackio.init(
+            project="Interpretable Diffusion",
+            name=run,
+            config={
+                "epochs": cfg.epochs,
+                "learning_rate": cfg.lr,
+                # TODO: pass batch_size here
+                "batch_size": next(iter(dataloader))[0].shape[0],
+            },
+        )
 
     optimizer = nnx.Optimizer(model, optax.adam(cfg.lr, eps=cfg.eps), wrt=nnx.Param)
 
     final_loss = 0
-    pbar = tqdm(range(cfg.epochs), desc="Training")
+    best_loss = float("inf")
+    best_epoch = 0
+    pbar = tqdm(range(cfg.epochs), desc="Training") if local else range(cfg.epochs)
     start = time.perf_counter()
-    for _ in pbar:
+    print("\nStarting training steps\n")
+    for epoch in pbar:
         running_loss = defaultdict(float)
 
-        for imgs, _ in tqdm(dataloader, desc="Iterating images", leave=False):
+        sub_pbar = (
+            tqdm(dataloader, desc="Iterating images", leave=False)
+            if local
+            else dataloader
+        )
+        for imgs, _ in sub_pbar:
             key, train_key = split(key, num=2)
             losses = train_step(model, imgs, optimizer, key=train_key)
 
+            if best_loss > losses[0]:
+                best_loss = losses[0]
+                best_epoch = epoch
+            elif not local:
+                print(f"Loss increased to {losses[0]} best loss still {best_loss}")
+
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 
-            if not loss_labels:
-                loss_labels = ["loss"] + [
-                    f"sub_loss_{i + 1}" for i in range(len(losses) - 1)
-                ]
+            if local:
+                if not loss_labels:
+                    loss_labels = ["loss"] + [
+                        f"sub_loss_{i + 1}" for i in range(len(losses) - 1)
+                    ]
 
-            for loss_label, loss in zip(loss_labels, losses):
-                running_loss[loss_label] += loss.item() / len(dataloader)
+                for loss_label, loss in zip(loss_labels, losses):
+                    running_loss[loss_label] += loss.item() / len(dataloader)
 
-        trackio.log(running_loss)
+        if local:
+            trackio.log(running_loss)
 
-        pbar.set_description(f"Training, loss={running_loss['loss']:.2f}")
+        if local:
+            assert isinstance(pbar, tqdm)  # For type hints
+            pbar.set_description(f"Training, loss={running_loss['loss']:.2f}")
+
         final_loss = running_loss["loss"]
     end = time.perf_counter()
 
-    report = f"""# Training report
-- Final loss: {final_loss}
-- Train time: {format_time(end - start)}
+    if local:
+        report = f"""# Training report
+    - Final loss: {final_loss}
+    - Train time: {format_time(end - start)}
 
-## Model config
-```yaml
-{config_string}
-```
-    """
-    trackio.log({"training_report": trackio.Markdown(report)})
+    ## Model config
+    ```yaml
+    {config_string}
+    ```
+        """
+        trackio.log({"training_report": trackio.Markdown(report)})
 
-    trackio.finish()
+        trackio.finish()
+    else:
+        print(
+            f"""
+# Training Report
+Final loss: {final_loss}
+Best loss: {best_loss}
+Best epoch: {best_epoch}
+Train time: {format_time(end - start)}
+"""
+        )
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-c", "--config", help="path to config file", required=True)
     parser.add_argument("-s", "--seed", type=int, help="seed for the run", default=0)
+    parser.add_argument("--local", action="store_true")
     args = parser.parse_args()
     config = load_config(args.config)
+    print("\nConfig loaded...")
 
     key = PRNGKey(args.seed)
     rngs = nnx.Rngs(args.seed)
@@ -146,6 +182,7 @@ if __name__ == "__main__":
     )
     run_name = run_name.replace("__", "_")
 
+    print("\nSetup complete...")
     key, subkey = split(key)
     train(
         model,
@@ -156,6 +193,7 @@ if __name__ == "__main__":
         loss_labels=loss_labels,
         run=run_name,
         config_string=config_string,
+        local=args.local,
     )
 
     save_model(model, config.checkpoint_dir)
