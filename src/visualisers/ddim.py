@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -8,14 +8,15 @@ from models.ddim import DDIM
 from models.paid import PAID
 from models.utils import remove_padding
 
-Carry = tuple[DDIM | PAID, jax.Array, jax.Array]
+Carry = tuple[jax.Array, jax.Array]
 
 
-def make_step(
+def make_ddpm_step(
     n_samples: int,
-    shape: tuple[int, ...],
+    model: DDIM | PAID,
+    alphas: jax.Array,
     condition: int = 0,
-    estimation_type: str = "noise",
+    estimation_type: str = "variance",
 ) -> Callable[[Carry, jax.Array], tuple[Carry, jax.Array]]:
     """
     Create the generation step keeping the number of samples and shape constant.
@@ -24,11 +25,13 @@ def make_step(
     ----------
     n_samples : int
         Number of image samples
-    shape : (int, int, int)
-        The shape of the images
+    alphas : Array (S)
+        The DDIM or PAID alpha values used to train the model
+    model : DDIM | PAID
+        The model used for generation
     condition : int
         How much of the data is fixed, i.e. conditioned on
-    estimation_type : str ("noise", "clean")
+    estimation_type : str ("variance", "mean")
         The type of estimation the model makes
 
     Returns
@@ -37,52 +40,137 @@ def make_step(
         Function to be used in jax scan
     """
 
-    if estimation_type not in ["noise", "clean"]:
+    if estimation_type not in ["variance", "mean"]:
         raise NotImplementedError(f"Estimation type {estimation_type} not implemented.")
-
-    noise_est = estimation_type == "noise"
 
     assert condition >= 0, "Condition period must be positive"
 
-    def step(carry: Carry, value: jax.Array) -> tuple[Carry, jax.Array]:
-        model, prev, key = carry
-        alpha_raw, step = jnp.split(value, 2, axis=0)
+    def step(carry: Carry, tau: jax.Array) -> tuple[Carry, jax.Array]:
+        # x_t[:, :condition] must be the initial condition regardless of t
+        x_t, key = carry
 
-        assert condition < prev.shape[1], (
-            f"Condition period must be shorter than provided data, {condition} >= {prev.shape[1]}"
+        assert condition < x_t.shape[1], (
+            f"Condition period must be shorter than provided data, {condition} >= {x_t.shape[1]}"
         )
 
-        key, noise_key = jax.random.split(key, 2)
-        noise = jax.random.normal(noise_key, shape=(n_samples, *shape))
+        t = tau * jnp.ones(n_samples, dtype="int32")
 
-        alpha = alpha_raw.reshape(-1, 1, 1, 1)
-        noisy_x = prev * jnp.sqrt(alpha) + noise * jnp.sqrt(1 - alpha)
-        x = jnp.concatenate([prev[:, :condition], noisy_x[:, condition:]], axis=1)
+        target_ndim = len(x_t.shape)
+        shape = (-1,) + (1,) * (target_ndim - 1)
+        alpha_t = alphas[t].reshape(shape)
+        alpha_tm1 = alphas[t - 1].reshape(shape)
 
         pred = model(
-            jnp.pad(x, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
-            step * jnp.ones(n_samples),
+            jnp.pad(x_t, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
+            t,
         )
         pred = remove_padding(pred, model.pad)
 
-        if noise_est:
-            denoised = (x - pred * jnp.sqrt(1.0 - alpha)) / jnp.sqrt(alpha)
-            curr = jnp.concatenate(
-                [prev[:, :condition], denoised[:, condition:]], axis=1
-            )
+        if estimation_type == "variance":
+            x_0 = (x_t - pred * jnp.sqrt(1 - alpha_t)) / jnp.sqrt(alpha_t)
         else:
-            curr = jnp.concatenate([prev[:, :condition], pred[:, condition:]], axis=1)
+            x_0 = pred
 
-        return (model, curr, key), curr
+        key, noise_key = jax.random.split(key, 2)
+        eps_tm1 = jax.random.normal(noise_key, shape=x_t.shape)
+
+        x_tm1 = jax.lax.cond(
+            tau == 1,
+            lambda: x_0,
+            lambda: x_0 * jnp.sqrt(alpha_tm1) + eps_tm1 * jnp.sqrt(1 - alpha_tm1),
+        )
+
+        # Assumes that x_T[:, :condition] is not random noise to begin with
+        x_tm1 = jnp.concatenate([x_t[:, :condition], x_tm1[:, condition:]], axis=1)
+
+        return (x_tm1, key), x_tm1
+
+    return step
+
+
+def make_ddim_step(
+    num_samples: int,
+    alphas: jax.Array,
+    model: DDIM | PAID,
+    condition: int = 5,
+    estimation_type: str = "variance",
+) -> Callable[[Carry, jax.Array], tuple[Carry, jax.Array]]:
+    """
+    Create the DDIM generation step function to be used in jax.lax.scan
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of image samples
+    alphas : Array (S)
+        The DDIM or PAID alpha values used to train the model
+    model : DDIM | PAID
+        The model used for generation
+    condition : int
+        How much of the data is fixed, i.e. conditioned on
+    estimation_type : str ("variance", "mean")
+        The type of estimation the model makes
+
+    Returns
+    -------
+    step
+        Function to be used in jax scan
+    """
+    if estimation_type not in ["mean", "variance"]:
+        raise NotImplementedError(
+            f"Estimation type {estimation_type} is not supported."
+        )
+
+    def step(carry: Carry, tau_next: jax.Array):
+        # x_t[:, :condition] must be the initial condition regardless of t
+        x_t, tau = carry
+
+        assert condition < x_t.shape[1], (
+            f"Condition period must be shorter than provided data, {condition} >= {x_t.shape[1]}"
+        )
+
+        t = tau * jnp.ones(num_samples, dtype="int32")
+        t_next = tau_next * jnp.ones(num_samples, dtype="int32")
+
+        target_ndim = len(x_t.shape)
+        shape = (-1,) + (1,) * (target_ndim - 1)
+        alpha_t = alphas[t].reshape(shape)
+        alpha_tm1 = alphas[t_next].reshape(shape)
+
+        pred = model(
+            jnp.pad(x_t, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
+            t,
+        )
+        pred = remove_padding(pred, model.pad)
+
+        if estimation_type == "variance":
+            eps = pred
+            x_0 = (x_t - pred * jnp.sqrt(1 - alpha_t)) / jnp.sqrt(alpha_t)
+        else:  # Must be "mean" given guard earlier
+            x_0 = pred
+            eps = (x_t - x_0 * jnp.sqrt(alpha_t)) / jnp.sqrt(1 - alpha_t)
+
+        x_tm1 = jax.lax.cond(
+            tau_next == 0,
+            lambda: x_0,
+            lambda: x_0 * jnp.sqrt(alpha_tm1) + eps * jnp.sqrt(1 - alpha_tm1),
+        )
+
+        # Assumes that x_T[:, :condition] is not random noise to begin with
+        x_tm1 = jnp.concatenate([x_t[:, :condition], x_tm1[:, condition:]], axis=1)
+
+        return (x_tm1, tau_next), x_tm1
 
     return step
 
 
 def generate_images(
     model: nnx.Module,
-    array_like: jax.Array,
+    input: jax.Array,
     condition: int = 0,
-    estimation_type: str = "noise",
+    estimation_type: str = "variance",
+    sample_method: str = "ddpm",
+    jump: Optional[int] = None,
     *,
     key: jax.Array,
 ) -> jax.Array:
@@ -97,8 +185,9 @@ def generate_images(
         Array who's shape is matched
     condition : int
         How much of the data is fixed
-    estimation_type : str ("noise", "clean")
+    estimation_type : str ("variance", "mean")
         The type of estimation the model makes
+    sample_method : str ("ddim", "ddpm")
     key : jax.Array
         PRNG key
 
@@ -111,21 +200,54 @@ def generate_images(
 
     model.eval()
 
-    if len(array_like.shape) < 4:
-        array_like = jnp.expand_dims(array_like, axis=3)
-    img_shape = array_like.shape[1:]
-    n_samples = array_like.shape[0]
+    if len(input.shape) < 4:
+        input = jnp.expand_dims(input, axis=3)
+    n_samples = input.shape[0]
 
-    steps = jnp.linspace(999, 0, 100, dtype=int)
-    alphas = (1 - model.betas).cumprod(axis=0)[steps]
-    values = jnp.concatenate([alphas[:, None], steps[:, None]], axis=1)
-
-    init = (model, array_like.copy(), key)
-
-    gen_step = make_step(
-        n_samples, img_shape, condition=condition, estimation_type=estimation_type
+    alphas = (1 - model.betas).cumprod(axis=0)
+    key, noise_key = jax.random.split(key)
+    x_T = jnp.concatenate(
+        [
+            input[:, :condition],
+            jax.random.normal(noise_key, input.shape)[:, condition:],
+        ],
+        axis=1,
     )
-    _, images = jax.lax.scan(gen_step, init, values)
+
+    if sample_method == "ddim":
+        if jump is None:
+            jump = 1
+
+        steps = jnp.append(jnp.arange(0, model.num_timesteps - 1)[-jump::-jump], 0)
+        init = (x_T, jnp.array(model.num_timesteps - 1))
+        gen_step = make_ddim_step(
+            n_samples,
+            alphas,
+            model,
+            condition=condition,
+            estimation_type=estimation_type,
+        )
+    elif sample_method == "ddpm":
+        if jump is not None:
+            print(
+                "WARNING: jump parameter provided but using DDPM. jump will be ignored."
+            )
+
+        steps = jnp.arange(1, model.num_timesteps)[::-1]
+        init = (x_T, key)
+        gen_step = make_ddpm_step(
+            n_samples,
+            alphas,
+            model,
+            condition=condition,
+            estimation_type=estimation_type,
+        )
+    else:
+        raise NotImplementedError(
+            f"Sampling method {sample_method} is not supported. Only 'ddim' and 'ddpm' are supported"
+        )
+
+    _, images = jax.lax.scan(gen_step, init, steps)
 
     return images[-1]
 
@@ -140,20 +262,28 @@ def generate_mnist(
 
 
 def generate_timeseries(
-    model: nnx.Module, array_like: jax.Array, key: jax.Array
+    model: nnx.Module, initial_condition: jax.Array, jump: int = 10, *, key: jax.Array
 ) -> jax.Array:
     """
     Wrapper for generating images that are permuted for the correct time and x axes.
     """
+    sample_method = "ddim"
+
     if isinstance(model, PAID):
         condition = model.condition
-        est_type = "clean"
+        est_type = "mean"
     else:
         condition = 1
-        est_type = "noise"
+        est_type = "variance"
 
     generated = generate_images(
-        model, array_like, condition=condition, estimation_type=est_type, key=key
+        model,
+        initial_condition,
+        condition=condition,
+        sample_method=sample_method,
+        estimation_type=est_type,
+        jump=jump,
+        key=key,
     )
 
     return jnp.permute_dims(generated, (0, 2, 1, 3))
