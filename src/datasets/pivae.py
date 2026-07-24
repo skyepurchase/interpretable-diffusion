@@ -3,6 +3,7 @@ from typing import Callable
 
 import numpy as np
 import torch
+from jaxtyping import Array
 from numpy.typing import NDArray
 from scipy.integrate import solve_ivp
 from torch.utils.data import DataLoader, Dataset
@@ -15,7 +16,7 @@ from utils.config.datasets import PiVAEConfig
 class PiVAEDataset(Dataset):
     """A wrapper of the torch Dataset for the PiVAE datasets."""
 
-    def __init__(self, series: NDArray, retain_dim: bool = False) -> None:
+    def __init__(self, series: NDArray | Array, retain_dim: bool = False) -> None:
         super().__init__()
         # series is in the form (B, x, t) flattened would give (B, t*x)
         # Instead (B, x*t) is desired so data[:, :12] gives the initial condition. Thus (B, t, x)
