@@ -27,8 +27,14 @@ def pendulum_model(y: jax.Array, omega: jax.Array) -> jax.Array:
     )
 
 
-def make_diffusion_model(ds: jax.Array) -> Callable[[jax.Array, jax.Array], jax.Array]:
+def make_diffusion_model(
+    ds: jax.Array, boundary: str | float = 0.0
+) -> Callable[[jax.Array, jax.Array], jax.Array]:
     """Create diffusion physics model with given spatial discretisation"""
+
+    assert boundary == "periodic" or isinstance(boundary, float), (
+        f"Expected boundary to be either be 'periodic' or a float, received {boundary}."
+    )
 
     def diffusion_model(y: jax.Array, a: jax.Array) -> jax.Array:
         """
@@ -39,7 +45,7 @@ def make_diffusion_model(ds: jax.Array) -> Callable[[jax.Array, jax.Array], jax.
         ----------
         y : (B, L)
             The input dynamics, y
-        a : (1,)
+        a : (B,)
             The known parameter of the diffusion system
 
         Returns
@@ -47,10 +53,24 @@ def make_diffusion_model(ds: jax.Array) -> Callable[[jax.Array, jax.Array], jax.
         dy : (B, L)
             The output dynamics, dy_dt
         """
-        interior = y[:, 1:-1]
+        assert len(y.shape) == 2, (
+            f"Expected y to have shape (B, L) but received {y.shape}."
+        )
+        assert y.shape[0] == a.shape[0], (
+            f"Expected y and a to have the same batch, {y.shape[0]} != {a.shape[0]}."
+        )
+
+        if boundary == "periodic":
+            bound_y = jnp.concatenate([y[:, -2:], y, y[:, :2]], axis=1)
+        elif isinstance(boundary, float):
+            bound_y = y[1:-1]
+        else:
+            raise ValueError(
+                f"Expected boundary to be either be 'periodic' or a float, received {boundary}."
+            )
 
         # finite differences
-        dy_ds = jnp.gradient(interior, ds, axis=1)
+        dy_ds = jnp.gradient(bound_y, ds, axis=1)
         assert not isinstance(dy_ds, list)
 
         d2y_ds2 = jnp.gradient(dy_ds, ds, axis=1)
@@ -59,16 +79,21 @@ def make_diffusion_model(ds: jax.Array) -> Callable[[jax.Array, jax.Array], jax.
         # generate derivatives
         dy_dt = a * d2y_ds2
 
-        full_dy_dt = jnp.pad(dy_dt, ((0, 0), (1, 1)))
-
-        return full_dy_dt
+        if boundary == "periodic":
+            return dy_dt[:, 2:-2]
+        elif isinstance(boundary, float):
+            return jnp.pad(dy_dt, ((0, 0), (1, 1)), constant_values=boundary)
+        else:
+            raise ValueError(
+                f"Expected boundary to be either be 'periodic' or a float, received {boundary}."
+            )
 
     return diffusion_model
 
 
 def get_physics_model(
     system: str,
-) -> tuple[Callable[[jax.Array], Callable[..., jax.Array]], int, int]:
+) -> tuple[Callable[[jax.Array, str | float], Callable[..., jax.Array]], int, int]:
     """
     Helper function to get a desired physics system model along with the expected number of physics parameters and time derivatives.
 
@@ -86,7 +111,7 @@ def get_physics_model(
         The number of time derivatives of the model
     """
     if system == "pendulum":
-        return lambda _: pendulum_model, 1, 2
+        return lambda _ds, _boundary: pendulum_model, 1, 2
     if system == "diffusion":
         return make_diffusion_model, 1, 1
 

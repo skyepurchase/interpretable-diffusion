@@ -244,7 +244,7 @@ class PhysDecoder(nnx.Module):
             ds = 0.0
 
         physics_model, _, self.num_derivatives = get_physics_model(system)
-        self.physics_model = physics_model(jnp.array(ds))
+        self.physics_model = physics_model(jnp.array(ds), 0.0)
         self.solver = get_solver(ode_solver)
 
         self.mask = gen_mask(self.pre_combs * self.post_combs)

@@ -577,7 +577,7 @@ class PAID(nnx.Module):
 
         physics_model, _, num_derivatives = get_physics_model(cfg.pde.system)
         self.pde_dim = self.num_grid_points * num_derivatives
-        self.physics_model = physics_model(jnp.array(ds))
+        self.physics_model = physics_model(jnp.array(ds), "periodic")
         self.solver = get_solver(cfg.pde.solver)
 
         assert self.physics_model is not None
