@@ -1,7 +1,6 @@
 import os
 import shutil
 from datetime import datetime
-from typing import Optional
 
 import orbax.checkpoint as ocp
 from flax import nnx
@@ -13,20 +12,19 @@ from models.train_ddim import train_step as ddim_step
 from models.train_paid import train_step as paid_step
 from models.train_phys_vae import train_step as phys_vae_step
 from models.train_vae import train_step as vae_step
-from utils.config.models import DDIMConfig, PAIDConfig, PhysVAEConfig, VAEConfig
-from utils.misc import TrainStep
+from utils import TrainStep
 
 from .ddim import DDIM
 from .vae import VAE
 
 MODELS = {
-    "vae": (VAE, VAEConfig),
-    "ddim": (DDIM, DDIMConfig),
-    "phys_vae": (PhysVAE, PhysVAEConfig),
-    "paid": (PAID, PAIDConfig),
+    "vae": VAE,
+    "ddim": DDIM,
+    "phys_vae": PhysVAE,
+    "paid": PAID,
 }
 
-TRAIN_STEPPER: dict[str, TrainStep] = {
+TRAIN_STEPPERS: dict[str, TrainStep] = {
     "ddim": ddim_step,
     "vae": vae_step,
     "phys_vae": phys_vae_step,
@@ -54,19 +52,9 @@ LOSS_LABELS: dict[str, list[str]] = {
 }
 
 
-def make_model(name: str, cfg, rngs: Rngs) -> nnx.Module:
-    """Create a model object based on the name and assorted config"""
-    if name in MODELS:
-        model, config = MODELS[name]
-
-        return model(config(**cfg), rngs)
-
-    raise NotImplementedError(f"Model {name} not implemented")
-
-
 def load_model(name: str, cfg, checkpoint, rngs: Rngs) -> nnx.Module:
     """Load model (specified by the config) from a specific checkpoint"""
-    model = make_model(name, cfg, rngs)
+    model = MODELS[name](**cfg, rngs=rngs)
     graph, state = nnx.split(model)
 
     checkpointer = ocp.StandardCheckpointer()
@@ -95,20 +83,3 @@ def save_model(model: nnx.Module, folder: str) -> None:
     checkpointer.save(latest_path, state)
 
     checkpointer.wait_until_finished()
-
-
-def get_trainer(
-    name: str,
-) -> tuple[TrainStep, Optional[list[str]]]:
-    """Return the relevant trainer function for the desired model"""
-    if name in TRAIN_STEPPER:
-        return TRAIN_STEPPER[name], LOSS_LABELS[name]
-
-    raise NotImplementedError(f"Trainer for {name} not implemented")
-
-
-__all__ = [
-    "make_model",
-    "load_model",
-    "get_trainer",
-]

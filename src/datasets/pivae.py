@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from datasets.utils import np_collate
-from utils.config.datasets import PiVAEConfig
 
 
 class PiVAEDataset(Dataset):
@@ -66,7 +65,7 @@ def pendulum_ODE() -> Callable[[NDArray, NDArray], NDArray]:
     return force_damped_pendulum
 
 
-def generate_pendulum_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
+def generate_pendulum_data(n_samples: int = 3500, t_grid: int = 50) -> NDArray:
     """
     Using the force damped ODE above generate a set of randomly initialised samples.
 
@@ -82,10 +81,10 @@ def generate_pendulum_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
     samples : (B,T,2)
         B samples with T timesteps including both the timestep and the pendulum angle.
     """
-    T = steps * 0.05
+    T = t_grid * 0.05
     t_span = (0, T)
 
-    samples = np.empty((0, 2, steps))
+    samples = np.empty((0, 2, t_grid))
     for _ in tqdm(range(n_samples), desc="Generating samples"):
         y_0 = np.random.uniform(low=-np.pi / 2, high=np.pi / 2)
         y0 = [y_0, 0]
@@ -94,7 +93,7 @@ def generate_pendulum_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
             fun=pendulum_ODE(),
             t_span=t_span,
             y0=y0,
-            t_eval=np.linspace(0, T, steps),
+            t_eval=np.linspace(0, T, t_grid),
             method="DOP853",
             rtol=1e-3,
             atol=1e-6,
@@ -139,7 +138,9 @@ def diffusion_PDE(ds: float) -> Callable[[NDArray, NDArray], NDArray]:
     return diffusion_advection
 
 
-def generate_diffusion_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
+def generate_diffusion_data(
+    n_samples: int = 3500, t_grid: int = 50, x_grid: int = 12
+) -> NDArray:
     """
     Using the diffusion PDE above generate a set of randomly initialised samples.
 
@@ -147,7 +148,7 @@ def generate_diffusion_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
     ----------
     n_samples : int = 3500
         The number of samples to generate
-    steps : int = 50
+    t_grid : int = 50
         The number of timesteps to take
 
     Returns
@@ -155,14 +156,13 @@ def generate_diffusion_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
     samples : (B,T,2)
         B samples with T timesteps including both the timestep and the pendulum angle.
     """
-    T = steps * 0.02
+    T = t_grid * 0.02
     t_span = (0, T)
 
-    H = 12
-    s = np.linspace(0, 2.0, H)
+    s = np.linspace(0, 2.0, x_grid)
     ds = s[1] - s[0]
 
-    samples = np.empty((0, H + 1, steps))
+    samples = np.empty((0, x_grid + 1, t_grid))
     for _ in tqdm(range(n_samples), desc="Generating samples"):
         c = np.random.uniform(low=0.5, high=1.5)
         y0 = c * np.sin(np.pi * s / s.max())
@@ -171,7 +171,7 @@ def generate_diffusion_data(n_samples: int = 3500, steps: int = 50) -> NDArray:
             fun=diffusion_PDE(ds),
             t_span=t_span,
             y0=y0,
-            t_eval=np.linspace(0, T, steps),
+            t_eval=np.linspace(0, T, t_grid),
             method="DOP853",
             rtol=1e-3,
             atol=1e-6,
@@ -189,70 +189,79 @@ SYSTEMS = {
 }
 
 
-def get_pivae(cfg: PiVAEConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
+def get_pivae(
+    dir: str,
+    system: str,
+    n_samples: int = 3500,
+    test_split: int = 500,
+    validation_split: int = 1000,
+    train_split: int = 1000,
+    t_grid: int = 50,
+    x_grid: int = 12,
+    batch_size: int = 128,
+    retain_dim: bool = False,
+) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Create pivae train, val, and test dataloaders"""
-    assert cfg.test_split + cfg.validation_split + cfg.train_split <= cfg.n_samples
+    assert test_split + validation_split + train_split <= n_samples
 
     if not all(
         [
-            os.path.exists(os.path.join(cfg.dir, cfg.system, file))
+            os.path.exists(os.path.join(dir, system, file))
             for file in ["test.npy", "val.npy", "train_pool.npy"]
         ]
     ):
-        samples = SYSTEMS[cfg.system](cfg.n_samples)
-        assert samples.shape == (cfg.n_samples, samples.shape[1], 50), (
-            f"Expected shape {(cfg.n_samples, samples.shape[1], 50)} but received {samples.shape}"
+        samples = SYSTEMS[system](n_samples, t_grid=t_grid, x_grid=x_grid)
+        assert samples.shape == (n_samples, samples.shape[1], 50), (
+            f"Expected shape {(n_samples, samples.shape[1], 50)} but received {samples.shape}"
         )
 
-        test = samples[: cfg.test_split]
-        validation = samples[cfg.test_split : cfg.test_split + cfg.validation_split]
-        train_pool = samples[cfg.test_split + cfg.validation_split :]
+        test = samples[:test_split]
+        validation = samples[test_split : test_split + validation_split]
+        train_pool = samples[test_split + validation_split :]
 
-        if not os.path.isdir(os.path.join(cfg.dir, cfg.system)):
-            os.makedirs(os.path.join(cfg.dir, cfg.system))
+        if not os.path.isdir(os.path.join(dir, system)):
+            os.makedirs(os.path.join(dir, system))
 
         print("\nSaving generated dataset")
-        np.save(os.path.join(cfg.dir, cfg.system, "test"), test, allow_pickle=False)
+        np.save(os.path.join(dir, system, "test"), test, allow_pickle=False)
+        np.save(os.path.join(dir, system, "val"), validation, allow_pickle=False)
         np.save(
-            os.path.join(cfg.dir, cfg.system, "val"), validation, allow_pickle=False
-        )
-        np.save(
-            os.path.join(cfg.dir, cfg.system, "train_pool"),
+            os.path.join(dir, system, "train_pool"),
             train_pool,
             allow_pickle=False,
         )
     else:
-        test = np.load(os.path.join(cfg.dir, cfg.system, "test.npy"))
-        validation = np.load(os.path.join(cfg.dir, cfg.system, "val.npy"))
-        train_pool = np.load(os.path.join(cfg.dir, cfg.system, "train_pool.npy"))
+        test = np.load(os.path.join(dir, system, "test.npy"))
+        validation = np.load(os.path.join(dir, system, "val.npy"))
+        train_pool = np.load(os.path.join(dir, system, "train_pool.npy"))
 
-        assert test.shape == (cfg.test_split, test.shape[1], 50), (
-            f"Loaded test set has shape {test.shape} expected {(cfg.test_split, test.shape[1], 50)} according to config"
+        assert test.shape == (test_split, test.shape[1], 50), (
+            f"Loaded test set has shape {test.shape} expected {(test_split, test.shape[1], 50)} according to config"
         )
-        assert validation.shape == (cfg.validation_split, validation.shape[1], 50), (
-            f"Loaded validation set has shape {validation.shape} expected {(cfg.validation_split, validation.shape[1], 50)} according to config"
+        assert validation.shape == (validation_split, validation.shape[1], 50), (
+            f"Loaded validation set has shape {validation.shape} expected {(validation_split, validation.shape[1], 50)} according to config"
         )
-        assert train_pool.shape[-1] == 50 and train_pool.shape[0] >= cfg.train_split, (
-            f"Loaded train set has shape {train_pool.shape} expected at least {(cfg.train_split, train_pool.shape[1], 50)} according to config"
+        assert train_pool.shape[-1] == 50 and train_pool.shape[0] >= train_split, (
+            f"Loaded train set has shape {train_pool.shape} expected at least {(train_split, train_pool.shape[1], 50)} according to config"
         )
 
-    test_dataset = PiVAEDataset(test, cfg.retain_dim)
-    validation_dataset = PiVAEDataset(validation, cfg.retain_dim)
+    test_dataset = PiVAEDataset(test, retain_dim)
+    validation_dataset = PiVAEDataset(validation, retain_dim)
     train_dataset = PiVAEDataset(
-        np.random.permutation(train_pool)[: cfg.train_split], cfg.retain_dim
+        np.random.permutation(train_pool)[:train_split], retain_dim
     )
 
     train_loader = DataLoader(
-        train_dataset, batch_size=cfg.batch_size, collate_fn=np_collate, shuffle=True
+        train_dataset, batch_size=batch_size, collate_fn=np_collate, shuffle=True
     )
     val_loader = DataLoader(
         validation_dataset,
-        batch_size=cfg.batch_size,
+        batch_size=batch_size,
         collate_fn=np_collate,
         shuffle=False,
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=cfg.batch_size, collate_fn=np_collate, shuffle=False
+        test_dataset, batch_size=batch_size, collate_fn=np_collate, shuffle=False
     )
 
     return train_loader, val_loader, test_loader

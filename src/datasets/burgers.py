@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader
 
 from datasets.pivae import PiVAEDataset
 from datasets.utils import np_collate
-from utils.config.datasets import PiVAEConfig
 
 
 def burgers_ODE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]:
@@ -149,83 +148,88 @@ def generate_burgers_data(
     return samples
 
 
-def get_burgers(cfg: PiVAEConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
+def get_burgers(
+    dir: str,
+    system: str,
+    batch_size: int = 128,
+    n_samples: int = 3500,
+    test_split: int = 500,
+    validation_split: int = 1000,
+    train_split: int = 1000,
+    t_grid: int = 128,
+    x_grid: int = 128,
+    retain_dim: bool = False,
+) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Create burgers equation train, val, and test dataloaders"""
-    assert cfg.test_split + cfg.validation_split + cfg.train_split <= cfg.n_samples, (
+    assert test_split + validation_split + train_split <= n_samples, (
         "Not enough samples specified for desired splits"
     )
 
     key = jax.random.key(0)
-    t_grid = 128
-    x_grid = 128
 
     if not all(
         [
-            os.path.exists(os.path.join(cfg.dir, cfg.system, file))
+            os.path.exists(os.path.join(dir, system, file))
             for file in ["test.npy", "val.npy", "train_pool.npy"]
         ]
     ):
         key, gen_key = jax.random.split(key)
         samples = generate_burgers_data(
-            cfg.n_samples, t_grid=t_grid, x_grid=x_grid, key=gen_key
+            n_samples, t_grid=t_grid, x_grid=x_grid, key=gen_key
         )
-        assert samples.shape == (cfg.n_samples, x_grid + 1, t_grid), (
-            f"Expected shape {(cfg.n_samples, x_grid + 1, t_grid)} but received {samples.shape}"
+        assert samples.shape == (n_samples, x_grid + 1, t_grid), (
+            f"Expected shape {(n_samples, x_grid + 1, t_grid)} but received {samples.shape}"
         )
 
-        test = samples[: cfg.test_split]
-        validation = samples[cfg.test_split : cfg.test_split + cfg.validation_split]
-        train_pool = samples[cfg.test_split + cfg.validation_split :]
+        test = samples[:test_split]
+        validation = samples[test_split : test_split + validation_split]
+        train_pool = samples[test_split + validation_split :]
 
-        if not os.path.isdir(os.path.join(cfg.dir, cfg.system)):
-            os.makedirs(os.path.join(cfg.dir, cfg.system))
+        if not os.path.isdir(os.path.join(dir, system)):
+            os.makedirs(os.path.join(dir, system))
 
         print("\nSaving generated dataset")
 
-        jnp.save(os.path.join(cfg.dir, cfg.system, "test"), test, allow_pickle=False)
+        jnp.save(os.path.join(dir, system, "test"), test, allow_pickle=False)
+        jnp.save(os.path.join(dir, system, "val"), validation, allow_pickle=False)
         jnp.save(
-            os.path.join(cfg.dir, cfg.system, "val"), validation, allow_pickle=False
-        )
-        jnp.save(
-            os.path.join(cfg.dir, cfg.system, "train_pool"),
+            os.path.join(dir, system, "train_pool"),
             train_pool,
             allow_pickle=False,
         )
     else:
-        test = jnp.load(os.path.join(cfg.dir, cfg.system, "test.npy"))
-        validation = jnp.load(os.path.join(cfg.dir, cfg.system, "val.npy"))
-        train_pool = jnp.load(os.path.join(cfg.dir, cfg.system, "train_pool.npy"))
+        test = jnp.load(os.path.join(dir, system, "test.npy"))
+        validation = jnp.load(os.path.join(dir, system, "val.npy"))
+        train_pool = jnp.load(os.path.join(dir, system, "train_pool.npy"))
 
-        assert test.shape == (cfg.test_split, x_grid + 1, t_grid), (
-            f"Loaded test set has shape {test.shape} expected {(cfg.test_split, x_grid + 1, t_grid)} according to config"
+        assert test.shape == (test_split, x_grid + 1, t_grid), (
+            f"Loaded test set has shape {test.shape} expected {(test_split, x_grid + 1, t_grid)} according to config"
         )
-        assert validation.shape == (cfg.validation_split, x_grid + 1, t_grid), (
-            f"Loaded validation set has shape {validation.shape} expected {(cfg.validation_split, x_grid + 1, t_grid)} according to config"
+        assert validation.shape == (validation_split, x_grid + 1, t_grid), (
+            f"Loaded validation set has shape {validation.shape} expected {(validation_split, x_grid + 1, t_grid)} according to config"
         )
-        assert (
-            train_pool.shape[-1] == t_grid and train_pool.shape[0] >= cfg.train_split
-        ), (
-            f"Loaded train set has shape {train_pool.shape} expected at least {(cfg.train_split, x_grid + 1, t_grid)} according to config"
+        assert train_pool.shape[-1] == t_grid and train_pool.shape[0] >= train_split, (
+            f"Loaded train set has shape {train_pool.shape} expected at least {(train_split, x_grid + 1, t_grid)} according to config"
         )
 
     key, perm_key = jax.random.split(key)
-    test_dataset = PiVAEDataset(test, cfg.retain_dim)
-    validation_dataset = PiVAEDataset(validation, cfg.retain_dim)
+    test_dataset = PiVAEDataset(test, retain_dim)
+    validation_dataset = PiVAEDataset(validation, retain_dim)
     train_dataset = PiVAEDataset(
-        jax.random.permutation(perm_key, train_pool)[: cfg.train_split], cfg.retain_dim
+        jax.random.permutation(perm_key, train_pool)[:train_split], retain_dim
     )
 
     train_loader = DataLoader(
-        train_dataset, batch_size=cfg.batch_size, collate_fn=np_collate, shuffle=True
+        train_dataset, batch_size=batch_size, collate_fn=np_collate, shuffle=True
     )
     val_loader = DataLoader(
         validation_dataset,
-        batch_size=cfg.batch_size,
+        batch_size=batch_size,
         collate_fn=np_collate,
         shuffle=False,
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=cfg.batch_size, collate_fn=np_collate, shuffle=False
+        test_dataset, batch_size=batch_size, collate_fn=np_collate, shuffle=False
     )
 
     return train_loader, val_loader, test_loader

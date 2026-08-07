@@ -1,5 +1,5 @@
 from functools import reduce
-from typing import Callable, Optional, ParamSpec
+from typing import Callable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -14,9 +14,8 @@ from models.ddim import compute_betas
 from models.mlp import make_mlp
 from models.modules.acts import ACTS
 from models.phys_vae import gen_selections
-from models.physics_models import get_physics_model, get_solver
+from models.physics_models import Operator, get_physics_model, get_solver
 from models.utils import remove_padding
-from utils.config.models import PAIDConfig
 
 
 class PhysUNet2D(nnx.Module):
@@ -24,7 +23,13 @@ class PhysUNet2D(nnx.Module):
 
     def __init__(
         self,
-        cfg: PAIDConfig,
+        unet_config: dict,
+        pde_config: dict,
+        aux_funcs: list[dict],
+        unmixer: dict,
+        phys_funcs: list[dict],
+        pre_funcs: list[dict],
+        post_funcs: list[dict],
         integral_level: int,
         t_span: jax.Array,
         t1: float,
@@ -32,7 +37,7 @@ class PhysUNet2D(nnx.Module):
         num_grid_points: int,
         pde_dim: int,
         time_dim: int,
-        physics_model: Callable[[jax.Array, ParamSpec], jax.Array],
+        physics_model: Operator,
         solver: Callable[[], AbstractSolver],
         pad: list[tuple[int, int]],
         rngs: nnx.Rngs,
@@ -40,8 +45,8 @@ class PhysUNet2D(nnx.Module):
         # Constants
         self.pad = pad
 
-        num_pre_funcs = len(cfg.pre_funcs)
-        num_post_funcs = len(cfg.post_funcs)
+        num_pre_funcs = len(pre_funcs)
+        num_post_funcs = len(post_funcs)
         self.pre_combs = 2**num_pre_funcs
         self.post_combs = 2**num_post_funcs
         self.pre_selections, self.post_selections = gen_selections(
@@ -62,76 +67,64 @@ class PhysUNet2D(nnx.Module):
 
         # Modules
         # temporal Unet
-        self.unet = CondUNet2D(
-            cfg.unet.in_features,
-            cfg.unet.base_features,
-            cfg.unet.feature_multiples,
-            cfg.unet.num_blocks,
-            cfg.unet.attention_resolutions,
-            ACTS[cfg.unet.act],
-            cfg.unet.dropout,
-            cfg.unet.dropout_rate,
-            cfg.unet.attention_heads,
-            jnp.float32,
-            jnp.float32,
-            rngs,
-        )
-        unet_latent_features = cfg.unet.feature_multiples[-1] * cfg.unet.base_features
+        unet_config["activation"] = ACTS[
+            unet_config["activation"]
+        ]  # Convert to function
+        self.unet = CondUNet2D(**unet_config, rngs=rngs)
+        unet_latent_features = unet_config["ch_mult"][-1] * unet_config["ch"]
 
         # Auxiliary functions
         aux_dims = []
-        halving = 2 ** (len(cfg.unet.feature_multiples) - 1)
+        halving = 2 ** (len(unet_config["ch_mult"]) - 1)
         flat_dim_base = ((self.num_grid_points + sum(self.pad[1])) // halving) * (
             (self.time_dim + sum(self.pad[0])) // halving
         )
         self.aux_funcs = nnx.List()
-        for aux_cfg in cfg.aux_funcs:
-            flat_dim = flat_dim_base * aux_cfg.features
+        for aux_cfg in aux_funcs:
+            flat_dim = flat_dim_base * aux_cfg["features"]
             aux_func = nnx.Sequential(
                 ResnetBlock(
                     unet_latent_features,
-                    aux_cfg.features,
-                    ACTS[aux_cfg.act],
-                    embedding_dim=aux_cfg.time_dim,
-                    dropout=aux_cfg.dropout,
-                    dropout_rate=aux_cfg.dropout_rate,
+                    aux_cfg["features"],
+                    ACTS[aux_cfg["act"]],
+                    embedding_dim=aux_cfg.get("time_dim"),
+                    dropout=aux_cfg["dropout"],
+                    dropout_rate=aux_cfg["dropout_rate"],
                     rngs=rngs,
                 ),
-                ACTS[aux_cfg.act],
+                ACTS[aux_cfg["act"]],
                 lambda x: x.reshape(x.shape[0], -1),
-                nnx.Linear(flat_dim, aux_cfg.latent_dim, rngs=rngs),
+                nnx.Linear(flat_dim, aux_cfg["latent_dim"], rngs=rngs),
             )
             self.aux_funcs.append(aux_func)
-            aux_dims.append(aux_cfg.latent_dim)
+            aux_dims.append(aux_cfg["latent_dim"])
 
         # Known physics signal estimators
         latent_dims = reduce(lambda x, y: x + y, aux_dims)
         self.unmixer_conv = nnx.Conv(
             in_features=latent_dims + 1,
-            out_features=cfg.unmixer.dims[0],
+            out_features=unmixer["dims"][0],
             kernel_size=(3, 3),
             strides=(1, 1),
             padding=(1, 1),
             rngs=rngs,
         )
         self.unmixer = nnx.List([])
-        for in_features, out_features in zip(
-            cfg.unmixer.dims[:-1], cfg.unmixer.dims[1:]
-        ):
+        for in_features, out_features in zip(unmixer["dims"][:-1], unmixer["dims"][1:]):
             self.unmixer.append(
                 ResnetBlock(
                     in_channels=in_features,
                     out_channels=out_features,
-                    activation=ACTS[cfg.unmixer.act],
-                    embedding_dim=cfg.unmixer.time_dim,
-                    dropout=cfg.unmixer.dropout,
-                    dropout_rate=cfg.unmixer.dropout_rate,
+                    activation=ACTS[unmixer["act"]],
+                    embedding_dim=unmixer.get("time_dim"),
+                    dropout=unmixer["dropout"],
+                    dropout_rate=unmixer["dropout_rate"],
                     rngs=rngs,
                 )
             )
             in_features = out_features
         self.unmixer_out = nnx.Conv(
-            in_features=cfg.unmixer.dims[-1],
+            in_features=unmixer["dims"][-1],
             out_features=1,
             kernel_size=(3, 3),
             strides=(1, 1),
@@ -140,25 +133,25 @@ class PhysUNet2D(nnx.Module):
         )
 
         # Physic parameter functions
-        assert len(cfg.phys_funcs) == len(cfg.pde.phys_param_ranges), (
-            f"Number of physics model parameters must match number of parameter estimators, {len(cfg.pde.phys_param_ranges)} != {len(cfg.phys_funcs)}"
+        assert len(phys_funcs) == len(pde_config["phys_param_ranges"]), (
+            f"Number of physics model parameters must match number of parameter estimators, {len(pde_config['phys_param_ranges'])} != {len(phys_funcs)}"
         )
         self.phys_funcs = nnx.List()
-        for phys_cfg, param_range in zip(cfg.phys_funcs, cfg.pde.phys_param_ranges):
-            flat_dim = flat_dim_base * phys_cfg.features
+        for phys_cfg, param_range in zip(phys_funcs, pde_config["phys_param_ranges"]):
+            flat_dim = flat_dim_base * phys_cfg["features"]
             phys_func = nnx.Sequential(
                 ResnetBlock(
                     unet_latent_features,
-                    phys_cfg.features,
-                    ACTS[phys_cfg.act],
-                    embedding_dim=phys_cfg.time_dim,
-                    dropout=phys_cfg.dropout,
-                    dropout_rate=phys_cfg.dropout_rate,
+                    phys_cfg["features"],
+                    ACTS[phys_cfg["act"]],
+                    embedding_dim=phys_cfg.get("time_dim"),
+                    dropout=phys_cfg["dropout"],
+                    dropout_rate=phys_cfg["dropout_rate"],
                     rngs=rngs,
                 ),
-                ACTS[phys_cfg.act],
+                ACTS[phys_cfg["act"]],
                 lambda x: x.reshape(x.shape[0], -1),
-                nnx.Linear(flat_dim, phys_cfg.latent_dim, rngs=rngs),
+                nnx.Linear(flat_dim, phys_cfg["latent_dim"], rngs=rngs),
                 nnx.sigmoid,
                 lambda x: x
                 * ((2 * param_range[1]) - (param_range[0] / 2) + (param_range[0] / 2)),
@@ -168,36 +161,36 @@ class PhysUNet2D(nnx.Module):
         # Perturbations
         ## PDE perturbations
         self.pre_funcs = nnx.List()
-        for func_cfg in cfg.pre_funcs:
+        for func_cfg in pre_funcs:
             # Z + X*D + t -> dy
             func = make_mlp(
-                func_cfg.latent_dim + self.pde_dim + 1,
-                func_cfg.dims,
+                func_cfg["latent_dim"] + self.pde_dim + 1,
+                func_cfg["dims"],
                 self.num_grid_points,
-                func_cfg.act,
+                func_cfg["act"],
                 rngs=rngs,
             )
             self.pre_funcs.append(func)
 
         ## Post PDE perturbations
         self.post_funcs = nnx.List()
-        for func_cfg in cfg.post_funcs:
+        for func_cfg in post_funcs:
             func = nnx.Sequential(
                 nnx.Conv(
-                    in_features=2 + func_cfg.latent_dim,
-                    out_features=func_cfg.features,
+                    in_features=2 + func_cfg["latent_dim"],
+                    out_features=func_cfg["features"],
                     kernel_size=(3, 3),
                     strides=(1, 1),
                     padding=(1, 1),
                     rngs=rngs,
                 ),
                 nnx.GroupNorm(
-                    num_features=func_cfg.features,
+                    num_features=func_cfg["features"],
                     num_groups=8,
                     rngs=rngs,
                 ),
                 nnx.Conv(
-                    in_features=func_cfg.features,
+                    in_features=func_cfg["features"],
                     out_features=1,
                     kernel_size=(3, 3),
                     strides=(1, 1),
@@ -350,7 +343,7 @@ class PhysUNet2D(nnx.Module):
                 f"Shape of post_selections must match number of post-ODE functions and post_combinations, {post_selections.shape} != {(len(self.post_funcs), pre_combs * post_combs)} and {len(self.pre_funcs)} != 0."
             )
 
-        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
+        def PDE(t: RealScalarLike, y: PyTree, args: PyTree):
             """Internal PDE to be solved during the generation process."""
             # y : (B*n, X*D)
             assert len(y.shape) == 2, f"expected (B, X*D) but received {y.shape}"
@@ -361,9 +354,9 @@ class PhysUNet2D(nnx.Module):
             ys = y.reshape(pre_combs, -1, self.pde_dim)
 
             # y_dot_phys : (n, B, X*D)
-            ys_dot_phys = jax.vmap(self.physics_model, in_axes=(0, None), out_axes=0)(
-                ys, *phys_params
-            )
+            ys_dot_phys = jax.vmap(
+                self.physics_model, in_axes=(None, 0, None), out_axes=0
+            )(t, ys, args)
 
             # ys_dot_aux : (n, B, X*D)
             ys_dot_aux = jnp.zeros_like(ys_dot_phys)
@@ -405,6 +398,7 @@ class PhysUNet2D(nnx.Module):
             t1=self.t1,
             dt0=self.dt,
             y0=init_cond,
+            args=phys_params,
             saveat=SaveAt(ts=self.t_span),
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
@@ -550,42 +544,68 @@ class PAID(nnx.Module):
     Physics aligned interpretable diffusion (PAID) model.
     """
 
-    def __init__(self, cfg: PAIDConfig, rngs: nnx.Rngs) -> None:
+    def __init__(
+        self,
+        unet: dict,
+        pde: dict,
+        aux_funcs: list[dict],
+        unmixer: dict,
+        phys_funcs: list[dict],
+        pre_funcs: list[dict],
+        post_funcs: list[dict],
+        num_timesteps: int,
+        beta_schedule: str,
+        beta_start: float,
+        beta_end: float,
+        disc_reg: float,
+        phys_reg: float,
+        aug_reg: float,
+        condition: int = 5,
+        pad: list[tuple] = [(0, 0), (0, 0)],
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
         # Diffusion constants
-        self.num_timesteps = cfg.num_timesteps
+        self.num_timesteps = num_timesteps
         self.betas = compute_betas(
-            cfg.beta_schedule, cfg.beta_start, cfg.beta_end, self.num_timesteps
+            beta_schedule, beta_start, beta_end, self.num_timesteps
         )
 
         # Training constants
-        self.disc_reg = cfg.disc_reg
-        self.phys_reg = cfg.phys_reg
-        self.aug_reg = cfg.aug_reg
+        self.disc_reg = disc_reg
+        self.phys_reg = phys_reg
+        self.aug_reg = aug_reg
 
         # Physics constants + functions
-        self.integral_level = cfg.pde.integral_level
-        self.time_dim = cfg.pde.time_dim
+        self.integral_level = pde["integral_level"]
+        self.time_dim = pde["time_dim"]
 
-        self.dt = cfg.pde.timestep / float(self.integral_level)
+        self.dt = pde["timestep"] / float(self.integral_level)
         self.t1 = (self.time_dim - 1) * self.dt
         self.t_span = jnp.linspace(0.0, self.t1, self.time_dim)
 
-        self.num_grid_points = cfg.pde.num_grid_points
+        self.num_grid_points = pde["num_grid_points"]
         ds = 0.0
         if self.num_grid_points > 1:
-            ds = cfg.pde.spatial_length / (self.num_grid_points - 1)
+            ds = pde["spatial_length"] / (self.num_grid_points - 1)
 
-        physics_model, _, num_derivatives = get_physics_model(cfg.pde.system)
+        physics_model, _, num_derivatives = get_physics_model(pde["system"])
         self.pde_dim = self.num_grid_points * num_derivatives
         self.physics_model = physics_model(jnp.array(ds), "periodic")
-        self.solver = get_solver(cfg.pde.solver)
+        self.solver = get_solver(pde["solver"])
 
         assert self.physics_model is not None
         assert self.solver is not None
 
         # Denoiser
         self.denoiser = PhysUNet2D(
-            cfg,
+            unet,
+            pde,
+            aux_funcs,
+            unmixer,
+            phys_funcs,
+            pre_funcs,
+            post_funcs,
             self.integral_level,
             self.t_span,
             self.t1,
@@ -595,14 +615,14 @@ class PAID(nnx.Module):
             self.time_dim,
             self.physics_model,
             self.solver,
-            cfg.pad,
+            pad,
             rngs,
         )
 
         # Additional constants
-        self.condition = cfg.condition
-        self.phys_param_ranges = cfg.pde.phys_param_ranges
-        self.pad = cfg.pad
+        self.condition = condition
+        self.phys_param_ranges = pde["phys_param_ranges"]
+        self.pad = pad
 
     def __call__(self, x: jax.Array, t: jax.Array) -> jax.Array:
         return self.denoiser.forward(x, t)
@@ -623,17 +643,6 @@ class PAID(nnx.Module):
         gen_phys : Array (B, W, H, C)
             Physics generated by the provided parameters
         """
-
-        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
-            """Internal PDE to be solved during the generation process."""
-            # y : (B*n, X*D)
-            assert len(y.shape) == 2, f"expected (B, X*D) but received {y.shape}"
-            assert y.shape[1] == self.pde_dim, (
-                f"Expected (B, {self.pde_dim}) but received {y.shape}"
-            )
-
-            return self.physics_model(y, *params)
-
         # init_cond : ^(B*n, X*D)
         init_cond = jnp.pad(
             init_y,
@@ -642,12 +651,13 @@ class PAID(nnx.Module):
 
         # y_seq : ^(T, B, X*D)
         y_seq = diffeqsolve(
-            ODETerm(PDE),
+            ODETerm(self.physics_model),
             self.solver(),
             t0=0.0,
             t1=self.t1,
             dt0=self.dt,
             y0=init_cond,
+            args=params,
             saveat=SaveAt(ts=self.t_span),
         ).ys
         assert y_seq is not None, "Failed to solve PDE"

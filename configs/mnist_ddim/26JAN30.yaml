@@ -21,8 +21,7 @@ model_config:
   beta_end: 0.02
 
 trainer_config:
-  lr: 1e-3
+  learning_rate: 1e-3
   epochs: 12
-  snapshot_freq: 1
 
 checkpoint_dir: checkpoints/mnist_ddim

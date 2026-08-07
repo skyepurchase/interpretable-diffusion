@@ -7,10 +7,9 @@ import seaborn as sns
 from flax import nnx
 from jax.random import PRNGKey
 
-from datasets import get_dataset
+from datasets import DATASETS
 from models import load_model
-from utils.config import ExperimentConfig, VisualiserConfig, load_config
-from utils.config.datasets import get_full_dataset_name
+from utils import load_config
 from visualisers.ddim import generate_mnist, generate_timeseries
 from visualisers.vae import (
     reconstruct_1D_series,
@@ -69,8 +68,18 @@ sns.set_palette(sns.color_palette("muted"))
 
 
 def visualise(
-    exp_cfg: ExperimentConfig,
-    vis_cfg: VisualiserConfig,
+    model: str,
+    model_config: dict,
+    dataset: str,
+    dataset_config: dict,
+    checkpoint_dir: str,
+    folder: os.PathLike | str,
+    format: str = "png",
+    checkpoint: str = "latest",
+    n_rows: int = 5,
+    n_cols: int = 20,
+    seed: int = 0,
+    **_,
 ) -> None:
     """
     Visualise the generated (or reconstructed) output produced by the specified trained model.
@@ -83,29 +92,33 @@ def visualise(
         The config for the visualisation
     """
     print("Setting up visualisation...\n")
-    rngs = nnx.Rngs(vis_cfg.seed)
-    key = PRNGKey(vis_cfg.seed)
+    rngs = nnx.Rngs(seed)
+    key = PRNGKey(seed)
 
-    if not os.path.isdir(vis_cfg.folder):
-        os.makedirs(vis_cfg.folder)
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
 
-    perm = os.path.join(vis_cfg.folder, f"{NOW}.{vis_cfg.format}")
-    latest = os.path.join(vis_cfg.folder, f"latest.{vis_cfg.format}")
+    perm = os.path.join(folder, f"{NOW}.{format}")
+    latest = os.path.join(folder, f"latest.{format}")
 
-    model = load_model(
-        exp_cfg.model,
-        exp_cfg.model_config,
-        os.path.join(os.getcwd(), exp_cfg.checkpoint_dir, vis_cfg.checkpoint),
+    loaded_model = load_model(
+        model,
+        model_config,
+        os.path.join(os.getcwd(), checkpoint_dir, checkpoint),
         rngs=rngs,
     )
 
-    _, _, test_loader = get_dataset(exp_cfg.dataset, exp_cfg.dataset_config)
-    inputs = next(iter(test_loader))[0][: vis_cfg.n_rows * vis_cfg.n_cols]
-    timesteps = next(iter(test_loader))[1][: vis_cfg.n_rows * vis_cfg.n_cols]
+    _, _, test_loader = DATASETS[dataset](**dataset_config)
+    inputs = next(iter(test_loader))[0][: n_rows * n_cols]
+    timesteps = next(iter(test_loader))[1][: n_rows * n_cols]
 
     print("Generating samples...\n")
-    dataset_name = get_full_dataset_name(exp_cfg.dataset, exp_cfg.dataset_config)
-    raw = VISUALISER[dataset_name][exp_cfg.model](model, inputs, key=key)
+    if "system" in dataset_config and dataset_config["system"] != "":
+        dataset_name = "-".join([dataset, dataset_config["system"]])
+    else:
+        dataset_name = dataset
+
+    raw = VISUALISER[dataset_name][model](loaded_model, inputs, key=key)
     shape = raw.shape[1:]
 
     print("Creating visualisation...\n")
@@ -113,9 +126,9 @@ def visualise(
         print("Assuming image data.\n")
 
         grid = (
-            raw.reshape(vis_cfg.n_rows, vis_cfg.n_cols, *shape)
+            raw.reshape(n_rows, n_cols, *shape)
             .transpose(0, 2, 1, 3, 4)
-            .reshape(vis_cfg.n_rows * shape[0], vis_cfg.n_cols * shape[1], shape[2])
+            .reshape(n_rows * shape[0], n_cols * shape[1], shape[2])
         )
 
         fig, ax = plt.subplots(1, 1, figsize=(12, 5))
@@ -127,13 +140,13 @@ def visualise(
         colour = "gray" if dataset_name == "mnist" else None
         ax.imshow(grid, cmap=colour)
 
-        plt.savefig(perm, format=vis_cfg.format)
-        plt.savefig(latest, format=vis_cfg.format)
+        plt.savefig(perm, format=format)
+        plt.savefig(latest, format=format)
     elif len(shape) == 1:
         print("Assuming point data.\n")
 
         fig, axes = plt.subplots(
-            vis_cfg.n_rows, vis_cfg.n_cols, figsize=(12, 5), sharex=True, sharey=True
+            n_rows, n_cols, figsize=(12, 5), sharex=True, sharey=True
         )
         fig.tight_layout()
 
@@ -155,8 +168,8 @@ def visualise(
 
         axes[-1][-1].legend()
 
-        plt.savefig(perm, format=vis_cfg.format)
-        plt.savefig(latest, format=vis_cfg.format)
+        plt.savefig(perm, format=format)
+        plt.savefig(latest, format=format)
     else:
         raise NotImplementedError(f"Data shape {shape} not supported")
 
@@ -183,13 +196,11 @@ if __name__ == "__main__":
     exp_cfg = load_config(args.config)
 
     visualise(
-        exp_cfg,
-        VisualiserConfig(
-            folder=args.output,
-            format=args.format,
-            checkpoint=args.checkpoint,
-            n_rows=args.n_rows,
-            n_cols=args.n_cols,
-            seed=args.seed,
-        ),
+        **exp_cfg,
+        folder=args.output,
+        format=args.format,
+        checkpoint=args.checkpoint,
+        n_rows=args.n_rows,
+        n_cols=args.n_cols,
+        seed=args.seed,
     )

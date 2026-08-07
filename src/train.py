@@ -13,11 +13,9 @@ from jax.random import PRNGKey, split
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from datasets import get_dataset
-from models import get_trainer, make_model, save_model
-from utils.config import load_config
-from utils.config.trainer import TrainerConfig
-from utils.misc import TrainStep
+from datasets import DATASETS
+from models import LOSS_LABELS, MODELS, TRAIN_STEPPERS, save_model
+from utils import TrainStep, load_config
 
 NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 
@@ -38,12 +36,15 @@ def train(
     model: nnx.Module,
     train_step: TrainStep,
     dataloader: DataLoader,
-    cfg: TrainerConfig,
-    key: jax.Array,
+    epochs: int,
+    learning_rate: float,
+    eps: float = 1e-8,
     loss_labels: Optional[list[str]] = None,
     run: str = "",
     config_string: str = "",
     local: bool = False,
+    *,
+    key: jax.Array,
 ):
     """
     Train a model given a dataset loader.
@@ -72,21 +73,23 @@ def train(
             project="Interpretable Diffusion",
             name=run,
             config={
-                "epochs": cfg.epochs,
-                "learning_rate": cfg.lr,
+                "epochs": epochs,
+                "learning_rate": learning_rate,
                 # TODO: pass batch_size here
                 "batch_size": next(iter(dataloader))[0].shape[0],
             },
         )
 
-    optimizer = nnx.Optimizer(model, optax.adam(cfg.lr, eps=cfg.eps), wrt=nnx.Param)
+    optimizer = nnx.Optimizer(model, optax.adam(learning_rate, eps=eps), wrt=nnx.Param)
 
     final_loss = 0
     best_loss = float("inf")
     best_epoch = 0
-    pbar = tqdm(range(cfg.epochs), desc="Training") if local else range(cfg.epochs)
-    start = time.perf_counter()
     print("\nStarting training steps\n")
+
+    pbar = tqdm(range(epochs), desc="Training") if local else range(epochs)
+
+    start = time.perf_counter()
     for epoch in pbar:
         running_loss = defaultdict(float)
 
@@ -163,20 +166,22 @@ if __name__ == "__main__":
     key = PRNGKey(args.seed)
     rngs = nnx.Rngs(args.seed)
 
-    train_loader, val_loader, test_loader = get_dataset(
-        config.dataset, config.dataset_config
+    train_loader, val_loader, test_loader = DATASETS[config["dataset"]](
+        **config["dataset_config"]
     )
-    config_string = yaml.dump(config.model_config, indent=4, sort_keys=False)
 
-    model = make_model(config.model, config.model_config, rngs=rngs)
+    config_string = yaml.dump(config["dataset_config"], indent=4, sort_keys=False)
 
-    train_step, loss_labels = get_trainer(config.model)
+    model = MODELS[config["model"]](**config["model_config"], rngs=rngs)
+
+    train_step = TRAIN_STEPPERS[config["model"]]
+    loss_labels = LOSS_LABELS[config["model"]]
 
     run_name = "_".join(
         [
-            config.model,
-            config.dataset,
-            config.dataset_config.get("system", ""),
+            config["model"],
+            config["dataset"],
+            config["dataset_config"].get("system", ""),
             datetime.now().strftime("%m%d-%H%M"),
         ]
     )
@@ -188,12 +193,12 @@ if __name__ == "__main__":
         model,
         train_step,
         train_loader,
-        TrainerConfig(**config.trainer_config),
-        subkey,
+        **config["trainer_config"],
+        key=subkey,
         loss_labels=loss_labels,
         run=run_name,
         config_string=config_string,
         local=args.local,
     )
 
-    save_model(model, config.checkpoint_dir)
+    save_model(model, config["checkpoint_dir"])

@@ -40,7 +40,7 @@ model_config:
 
   system: pendulum
   time_dim: 50
-  integral_level: 1.0
+  integral_level: 1
   timestep: 0.05
   ode_solver: euler
 
@@ -49,7 +49,7 @@ model_config:
   gamma: 0.1
 
 trainer_config:
-  lr: 1e-3
+  learning_rate: 1e-3
   eps: 1e-3
   epochs: 5000
 

@@ -2,8 +2,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from models.modules import make_module
-from utils.config.models import ModelArch, VAEConfig
+from models.modules import MODULES
 
 
 class Encoder(nnx.Module):
@@ -20,16 +19,13 @@ class Encoder(nnx.Module):
         The model RNGs
     """
 
-    def __init__(self, arch: ModelArch, latent_dim=2, *, rngs: nnx.Rngs) -> None:
+    def __init__(self, arch: list[dict], latent_dim=2, *, rngs: nnx.Rngs) -> None:
         self.latent_dim = latent_dim
 
         self.layers = nnx.List()
         for layer in arch:
-            self.layers.append(
-                make_module(
-                    layer.type, layer.config, out_features=2 * latent_dim, rngs=rngs
-                )
-            )
+            config = layer["config"]
+            self.layers.append(MODULES[layer["type"]](**config, rngs=rngs))
 
     def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         """Encode image x into latent"""
@@ -69,7 +65,7 @@ class Decoder(nnx.Module):
 
     def __init__(
         self,
-        arch: ModelArch,
+        arch: list[dict],
         latent_dim: int,
         channel_start: int = 6,
         initial_shape: int = 7,
@@ -93,9 +89,8 @@ class Decoder(nnx.Module):
 
         self.layers = nnx.List()
         for layer in arch:
-            self.layers.append(
-                make_module(layer.type, layer.config, out_features=1, rngs=rngs)
-            )
+            config = layer["config"]
+            self.layers.append(MODULES[layer["type"]](**config, rngs=rngs))
 
     def __call__(self, z: jax.Array) -> jax.Array:
         """Decode the given latent"""
@@ -113,7 +108,9 @@ class Decoder(nnx.Module):
             x = layer(x)
 
         if self.img_gen:
-            assert x.shape == (z.shape[0], self.l_target, self.l_target, 1)
+            assert x.shape == (z.shape[0], self.l_target, self.l_target, 1), (
+                f"Expected output to be target shape, {x.shape} != ({z.shape[0]}, {self.l_target}, {self.l_target}, 1)"
+            )
 
         return jnp.clip(x, self.eps, 1 - self.eps)
 
@@ -130,19 +127,31 @@ class VAE(nnx.Module):
         The model RNGs
     """
 
-    def __init__(self, cfg: VAEConfig, rngs: nnx.Rngs) -> None:
-        self.latent_dim = cfg.latent_dim
-        self.img_gen = cfg.img_gen
+    def __init__(
+        self,
+        encoder: list[dict],
+        decoder: list[dict],
+        latent_dim: int = 2,
+        channel_start: int = 6,
+        initial_shape: int = 7,
+        output_shape: int = 28,
+        eps: float = 1e-6,
+        img_gen: bool = True,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        self.latent_dim = latent_dim
+        self.img_gen = img_gen
 
-        self.encode = Encoder(arch=cfg.encoder, latent_dim=cfg.latent_dim, rngs=rngs)
+        self.encode = Encoder(arch=encoder, latent_dim=latent_dim, rngs=rngs)
         self.decode = Decoder(
-            arch=cfg.decoder,
-            latent_dim=cfg.latent_dim,
-            channel_start=cfg.channel_start,
-            initial_shape=cfg.initial_shape,
-            target_shape=cfg.output_shape,
-            eps=cfg.eps,
-            img_gen=cfg.img_gen,
+            arch=decoder,
+            latent_dim=latent_dim,
+            channel_start=channel_start,
+            initial_shape=initial_shape,
+            target_shape=output_shape,
+            eps=eps,
+            img_gen=img_gen,
             rngs=rngs,
         )
 

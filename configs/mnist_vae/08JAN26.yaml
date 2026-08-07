@@ -3,10 +3,10 @@ dataset_config:
   dir: ./data/MNIST
   download: true
   batch_size: 128
+
 model: vae
 model_config:
   encoder:
-    # In channel based on dataset/previous layer
     - type: conv
       config:
         in_features: 1
@@ -17,7 +17,8 @@ model_config:
         act: relu
     - type: maxpool
       config:
-        window_shape: [3,3]
+        window_shape: (3,3)
+        strides: (1,1)
     - type: conv
       config:
         in_features: 16
@@ -30,17 +31,21 @@ model_config:
       config: {}
     - type: linear
       config:
-        in_features: 128 # ideally calculate
+        in_features: 128
         out_features: 32
+        act: relu
     - type: linear
       config:
         in_features: 32
+        out_features: 4
+        act: relu
   decoder:
     - type: conv
       config:
         in_features: 6
         out_features: 32
         kernel_size: [3,3]
+        strides: null
         padding: same
         act: relu
     - type: upsample
@@ -52,6 +57,7 @@ model_config:
         in_features: 32
         out_features: 16
         kernel_size: [3,3]
+        strides: null
         padding: valid
         act: relu
     - type: upsample
@@ -63,6 +69,7 @@ model_config:
         in_features: 16
         out_features: 1
         kernel_size: [3,3]
+        strides: null
         padding: valid
         act: sigmoid
   latent_dim: 2
@@ -70,7 +77,9 @@ model_config:
   initial_shape: 7
   output_shape: 28
   eps: 1e-6
+
 trainer_config:
-  lr: 1e-3
+  learning_rate: 1e-3
   epochs: 15
+
 checkpoint_dir: checkpoints/mnist_vae

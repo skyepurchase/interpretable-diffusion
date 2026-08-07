@@ -8,13 +8,13 @@ dataset_config:
 model: paid
 model_config:
   unet:
-    in_features: 1
-    base_features: 32
-    feature_multiples: [1, 2, 2]
-    num_blocks: 1
+    in_channels: 1
+    ch: 32
+    ch_mult: [1, 2, 2]
+    num_res_blocks: 1
     attention_resolutions: [2]
-    attention_heads: 4
-    act: swish
+    num_heads: 4
+    activation: swish
     dropout: True
     dropout_rate: 0.1
 
@@ -70,18 +70,17 @@ model_config:
   beta_start: 0.0001
   beta_end: 0.02
 
-  alpha: 1e-1
-  beta: 1e-2
-  gamma: 1e4
+  disc_reg: 1e-1
+  phys_reg: 1e-2
+  aug_reg: 1e4
 
   pad:
     - [1, 1]
     - [0, 0]
 
 trainer_config:
-  lr: 1e-3
+  learning_rate: 1e-3
   eps: 1e-3
   epochs: 100
-  snapshot_freq: 1
 
 checkpoint_dir: checkpoints/diffusion_paid

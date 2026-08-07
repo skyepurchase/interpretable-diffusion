@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from flax import nnx
 
 from models.phys_vae import PhysVAE
-from utils.misc import Distribution
+from utils import Distribution
 
 
 def KL_divergence(

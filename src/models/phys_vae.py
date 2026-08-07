@@ -9,8 +9,7 @@ from jaxtyping import PyTree
 
 from models.mlp import make_mlp
 from models.physics_models import get_physics_model, get_solver
-from utils.config.models import PhysDecoderConfig, PhysEncoderConfig, PhysVAEConfig
-from utils.misc import Distribution
+from utils import Distribution
 
 
 def gen_selections(n_pre_elms: int, n_post_elms: int) -> tuple[jax.Array, jax.Array]:
@@ -65,18 +64,29 @@ class PhysEncoder(nnx.Module):
         The model RNGs
     """
 
-    def __init__(self, cfg: PhysEncoderConfig, data_dim: int, rngs: nnx.Rngs) -> None:
+    def __init__(
+        self,
+        aux_funcs: list[dict],
+        unmixer: dict,
+        phys_funcs: list[dict],
+        data_dim: int,
+        rngs: nnx.Rngs,
+    ) -> None:
         self.data_dim = data_dim
 
         # Setup auxiliary functions
         self.aux_latent_dims = []
         self.aux_funcs = nnx.List()
-        for aux_cfg in cfg.aux_funcs:
-            self.aux_latent_dims.append(aux_cfg.latent_dim)
+        for aux_cfg in aux_funcs:
+            self.aux_latent_dims.append(aux_cfg["latent_dim"])
 
             # Assumes all models are MLPs
             aux_func = make_mlp(
-                data_dim, aux_cfg.dims, 2 * aux_cfg.latent_dim, aux_cfg.act, rngs=rngs
+                data_dim,
+                aux_cfg["dims"],
+                2 * aux_cfg["latent_dim"],
+                aux_cfg["act"],
+                rngs=rngs,
             )
 
             self.aux_funcs.append(aux_func)
@@ -85,21 +95,21 @@ class PhysEncoder(nnx.Module):
 
         self.unmixer = make_mlp(
             latent_dims + data_dim,
-            cfg.unmixer.dims,
+            unmixer["dims"],
             data_dim,
-            cfg.unmixer.act,
+            unmixer["act"],
             rngs=rngs,
         )
-        self.residual = cfg.unmixer.residual
+        self.residual = unmixer["residual"]
 
         self.phys_funcs = nnx.List()
-        for phys_cfg in cfg.phys_funcs:
+        for phys_cfg in phys_funcs:
             # Assumes all models are MLPs
             phys_func = make_mlp(
                 data_dim,
-                phys_cfg.dims,
-                2 * phys_cfg.latent_dim,
-                phys_cfg.act,
+                phys_cfg["dims"],
+                2 * phys_cfg["latent_dim"],
+                phys_cfg["act"],
                 rngs=rngs,
             )
 
@@ -179,7 +189,8 @@ class PhysDecoder(nnx.Module):
 
     def __init__(
         self,
-        cfg: PhysDecoderConfig,
+        pre_funcs: list[dict],
+        post_funcs: list[dict],
         system: str,
         t1: int,
         dt: float,
@@ -189,6 +200,8 @@ class PhysDecoder(nnx.Module):
         integral_level: int,
         t_span: jax.Array,
         ode_solver: str,
+        x_log_sigma: float = 0.01,
+        *,
         rngs: nnx.Rngs,
     ) -> None:
         self.time_dim = time_dim
@@ -202,32 +215,32 @@ class PhysDecoder(nnx.Module):
         self.data_dim = self.time_dim * self.num_grid_points
         self.ode_dim = self.num_grid_points * self.num_derivatives
 
-        self.x_log_sigma = cfg.x_log_sigma
+        self.x_log_sigma = x_log_sigma
 
-        self.num_pre_funcs = len(cfg.pre_funcs)
-        self.num_post_funcs = len(cfg.post_funcs)
+        self.num_pre_funcs = len(pre_funcs)
+        self.num_post_funcs = len(post_funcs)
 
         self.pre_funcs = nnx.List()
         self.post_funcs = nnx.List()
-        for func_cfg in cfg.pre_funcs:
+        for func_cfg in pre_funcs:
             # Assume all models are MLPs
             # TODO: use a time embedding
             # z + L*D + t -> dy
             func = make_mlp(
-                func_cfg.latent_dim + self.ode_dim + 1,
-                func_cfg.dims,
+                func_cfg["latent_dim"] + self.ode_dim + 1,
+                func_cfg["dims"],
                 self.num_grid_points,
-                func_cfg.act,
+                func_cfg["act"],
                 rngs=rngs,
             )
             self.pre_funcs.append(func)
 
-        for func_cfg in cfg.post_funcs:
+        for func_cfg in post_funcs:
             func = make_mlp(
-                func_cfg.latent_dim + self.data_dim,
-                func_cfg.dims,
+                func_cfg["latent_dim"] + self.data_dim,
+                func_cfg["dims"],
                 self.data_dim - self.num_grid_points,  # Do not overwrite init condition
-                func_cfg.act,
+                func_cfg["act"],
                 rngs=rngs,
             )
             self.post_funcs.append(func)
@@ -270,7 +283,7 @@ class PhysDecoder(nnx.Module):
             The statistics for the series with the mean and log variance stacked in the first axis
         """
 
-        def ODE(t: RealScalarLike, y: PyTree, _args: PyTree):
+        def ODE(t: RealScalarLike, y: PyTree, args: PyTree):
             """Internal ODE to be solved during the generation process."""
             # y : (B*n, L*D)
             assert len(y.shape) == 2, f"expected (B*n, L*D) but received {y.shape}"
@@ -281,9 +294,9 @@ class PhysDecoder(nnx.Module):
             ys = jnp.reshape(y, (self.pre_combs, -1, self.ode_dim))
 
             # ys_dot_phys : (n, B, L*D)
-            ys_dot_phys = jax.vmap(self.physics_model, in_axes=(0, None), out_axes=0)(
-                ys, *phys_params
-            )
+            ys_dot_phys = jax.vmap(
+                self.physics_model, in_axes=(None, 0, None), out_axes=0
+            )(t, ys, args)
 
             # ys_dot_aux : (n, B, L*D)
             ys_dot_aux = jnp.zeros_like(ys_dot_phys)
@@ -330,6 +343,7 @@ class PhysDecoder(nnx.Module):
             t1=self.t1,
             dt0=self.dt,
             y0=init_cond,
+            args=phys_params,
             saveat=SaveAt(ts=self.t_span),
         ).ys
         # y_seq : (S, B*n, L*D)
@@ -395,7 +409,7 @@ class PhysDecoder(nnx.Module):
             The statistics for the series with the mean and log variance stacked in the first axis
         """
 
-        def PDE(t: RealScalarLike, y: PyTree, _args: PyTree):
+        def PDE(t: RealScalarLike, y: PyTree, args: PyTree):
             """Internal PDE to be solved during the generation process."""
             # y : (B, L*D)
             assert len(y.shape) == 2, f"expected (B, L*D) but received {y.shape}"
@@ -406,7 +420,7 @@ class PhysDecoder(nnx.Module):
             ys = y[:, : self.ode_dim].reshape(-1, self.ode_dim)
 
             # ys_dot_phys : (B, L*D)
-            ys_dot_phys = self.physics_model(ys, *phys_params)
+            ys_dot_phys = self.physics_model(t, ys, args)
 
             # ys_dot_aux : (B, L*D)
             ys_dot_aux = jnp.zeros_like(ys_dot_phys)
@@ -438,6 +452,7 @@ class PhysDecoder(nnx.Module):
             t1=self.t1,
             dt0=self.dt,
             y0=init_cond,
+            args=phys_params,
             saveat=SaveAt(ts=self.t_span),
         ).ys
         # y_seq : (S, B, L*D)
@@ -477,50 +492,67 @@ class PhysVAE(nnx.Module):
         The model RNGs
     """
 
-    def __init__(self, cfg: PhysVAEConfig, rngs: nnx.Rngs) -> None:
-        self.integral_level = cfg.integral_level
-        self.integral_len = (cfg.time_dim - 1) * self.integral_level + 1
-        self.integral_step = cfg.timestep / float(cfg.integral_level)
+    def __init__(
+        self,
+        encoder: dict,
+        decoder: dict,
+        time_dim: int,
+        phys_param_ranges: list[tuple[float, float]],
+        system: str,
+        integral_level: int,
+        timestep: float,
+        ode_solver: str,
+        alpha: float,
+        beta: float,
+        gamma: float,
+        length: float = 0.0,
+        num_grid_points: int = 1,
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        self.integral_level = integral_level
+        self.integral_len = (time_dim - 1) * self.integral_level + 1
+        self.integral_step = timestep / float(integral_level)
 
         self.t_span = jnp.linspace(
             0.0, self.integral_step * (self.integral_len - 1), self.integral_len
         )
-        self.num_grid_points = cfg.num_grid_points
-        _, num_phys_params, num_derivatives = get_physics_model(cfg.system)
+        self.num_grid_points = num_grid_points
+        _, num_phys_params, num_derivatives = get_physics_model(system)
         self.ode_dim = self.num_grid_points * num_derivatives
-        self.data_dim = self.num_grid_points * cfg.time_dim
+        self.data_dim = self.num_grid_points * time_dim
 
-        assert len(range(0, self.integral_len, self.integral_level)) == cfg.time_dim, (
-            f"Time dimension and integral steps not compatible {len(range(0, self.integral_len, self.integral_level))} != {cfg.time_dim}"
+        assert len(range(0, self.integral_len, self.integral_level)) == time_dim, (
+            f"Time dimension and integral steps not compatible {len(range(0, self.integral_len, self.integral_level))} != {time_dim}"
         )
 
         self.encode = PhysEncoder(
-            cfg=cfg.encoder, data_dim=cfg.time_dim * cfg.num_grid_points, rngs=rngs
+            **encoder, data_dim=time_dim * num_grid_points, rngs=rngs
         )
         self.decode = PhysDecoder(
-            cfg=cfg.decoder,
+            **decoder,
             t1=self.integral_len,
             dt=self.integral_step,
-            L=cfg.length,
-            time_dim=cfg.time_dim,
-            num_grid_points=cfg.num_grid_points,
-            integral_level=cfg.integral_level,
+            L=length,
+            time_dim=time_dim,
+            num_grid_points=num_grid_points,
+            integral_level=integral_level,
             t_span=self.t_span,
-            ode_solver=cfg.ode_solver,
-            system=cfg.system,
+            ode_solver=ode_solver,
+            system=system,
             rngs=rngs,
         )
 
-        self.phys_param_ranges = cfg.phys_param_ranges
+        self.phys_param_ranges = phys_param_ranges
 
         assert len(self.phys_param_ranges) == num_phys_params, (
-            f"Number of physics parameters should be consistent. Received {len(self.phys_param_ranges)} ranges but {cfg.system} takes {num_phys_params} parameters."
+            f"Number of physics parameters should be consistent. Received {len(self.phys_param_ranges)} ranges but {system} takes {num_phys_params} parameters."
         )
         self.mask = self.decode.mask
 
-        self.alpha = cfg.alpha
-        self.beta = cfg.beta
-        self.gamma = cfg.gamma
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
 
     def __call__(self, x: jax.Array, key: jax.Array) -> Distribution:
         """Reconstruct the input"""
@@ -582,19 +614,16 @@ class PhysVAE(nnx.Module):
         solution : Array
             The solution at the resolution of inidividual timesteps
         """
-
-        def ODE(_t: RealScalarLike, y: PyTree, _args: PyTree):
-            return self.decode.physics_model(y, *params)
-
         init_cond = jnp.pad(init_y, ((0, 0), (0, self.ode_dim - self.num_grid_points)))
 
         y_seq = diffeqsolve(
-            ODETerm(ODE),
+            ODETerm(self.decode.physics_model),
             self.decode.solver(),
             t0=0.0,
             t1=self.integral_len,
             dt0=self.integral_step,
             y0=init_cond,
+            args=params,
             saveat=SaveAt(ts=self.t_span),
         ).ys
         assert y_seq is not None, "Failed to solve ODE"

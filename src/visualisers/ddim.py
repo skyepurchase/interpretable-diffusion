@@ -237,8 +237,8 @@ def generate_images(
         init = (x_T, key)
         gen_step = make_ddpm_step(
             n_samples,
-            alphas,
             model,
+            alphas,
             condition=condition,
             estimation_type=estimation_type,
         )
