@@ -2,7 +2,7 @@ import time
 from argparse import ArgumentParser
 from collections import defaultdict
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 
 import jax
 import optax
@@ -14,8 +14,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import DATASETS
-from models import LOSS_LABELS, MODELS, TRAIN_STEPPERS, save_model
-from utils import TrainStep, load_config
+from models import LOSS_LABELS, MODELS, PRETRAIN_STEPPERS, TRAIN_STEPPERS, save_model
+from utils import load_config
 
 NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 
@@ -34,7 +34,7 @@ def format_time(seconds):
 
 def train(
     model: nnx.Module,
-    train_step: TrainStep,
+    train_step: Callable,
     dataloader: DataLoader,
     epochs: int,
     learning_rate: float,
@@ -43,6 +43,7 @@ def train(
     run: str = "",
     config_string: str = "",
     local: bool = False,
+    pretrain: bool = False,
     *,
     key: jax.Array,
 ):
@@ -80,33 +81,29 @@ def train(
             },
         )
 
-    optimizer = nnx.Optimizer(model, optax.adam(learning_rate, eps=eps), wrt=nnx.Param)
+    optimiser = nnx.Optimizer(model, optax.adam(learning_rate, eps=eps), wrt=nnx.Param)
 
     final_loss = 0
     best_loss = float("inf")
     best_epoch = 0
     print("\nStarting training steps\n")
 
-    pbar = tqdm(range(epochs), desc="Training") if local else range(epochs)
+    pbar = tqdm(range(epochs)) if local else range(epochs)
 
     start = time.perf_counter()
     for epoch in pbar:
         running_loss = defaultdict(float)
 
         sub_pbar = (
-            tqdm(dataloader, desc="Iterating images", leave=False)
+            tqdm(dataloader, desc="Iterating batches", leave=False)
             if local
             else dataloader
         )
-        for imgs, _ in sub_pbar:
+        for batch, _ in sub_pbar:
             key, train_key = split(key, num=2)
-            losses = train_step(model, imgs, optimizer, key=train_key)
-
-            if best_loss > losses[0]:
-                best_loss = losses[0]
-                best_epoch = epoch
-            elif not local:
-                print(f"Loss increased to {losses[0]} best loss still {best_loss}")
+            losses = train_step(
+                model=model, data=batch, optimiser=optimiser, key=train_key
+            )
 
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 
@@ -122,16 +119,27 @@ def train(
         if local:
             trackio.log(running_loss)
 
+        curr_loss = running_loss["loss"]
+        if best_loss >= curr_loss:
+            best_loss = curr_loss
+            best_epoch = epoch
+        elif not local:
+            print(
+                f"Loss surpassed best loss: {curr_loss:.2E}. Best loss: {best_loss:.2E}."
+            )
+
         if local:
             assert isinstance(pbar, tqdm)  # For type hints
-            pbar.set_description(f"Training, loss={running_loss['loss']:.2f}")
+            pbar.set_description(
+                f"{'Pre' if pretrain else ''}Training, loss={running_loss['loss']:.2E}"
+            )
 
         final_loss = running_loss["loss"]
     end = time.perf_counter()
 
     if local:
         report = f"""# Training report
-    - Final loss: {final_loss}
+    - Final loss: {final_loss:.2E}
     - Train time: {format_time(end - start)}
 
     ## Model config
@@ -146,8 +154,8 @@ def train(
         print(
             f"""
 # Training Report
-Final loss: {final_loss}
-Best loss: {best_loss}
+Final loss: {final_loss:.2E}
+Best loss: {best_loss:.2E}
 Best epoch: {best_epoch}
 Train time: {format_time(end - start)}
 """
@@ -166,14 +174,13 @@ if __name__ == "__main__":
     key = PRNGKey(args.seed)
     rngs = nnx.Rngs(args.seed)
 
-    train_loader, val_loader, test_loader = DATASETS[config["dataset"]](
-        **config["dataset_config"]
-    )
+    train_loader, _, _ = DATASETS[config["dataset"]](**config["dataset_config"])
 
     config_string = yaml.dump(config["dataset_config"], indent=4, sort_keys=False)
 
     model = MODELS[config["model"]](**config["model_config"], rngs=rngs)
 
+    pretrain_step = PRETRAIN_STEPPERS.get(config["model"])
     train_step = TRAIN_STEPPERS[config["model"]]
     loss_labels = LOSS_LABELS[config["model"]]
 
@@ -188,17 +195,34 @@ if __name__ == "__main__":
     run_name = run_name.replace("__", "_")
 
     print("\nSetup complete...")
+
+    if pretrain_step is not None:
+        key, subkey = split(key)
+        train(
+            model,
+            pretrain_step,
+            train_loader,
+            **config["trainer_config"],
+            loss_labels=["loss"],
+            run="pretrain_" + run_name,
+            config_string=config_string,
+            local=args.local,
+            pretrain=True,
+            key=subkey,
+        )
+
     key, subkey = split(key)
     train(
         model,
         train_step,
         train_loader,
         **config["trainer_config"],
-        key=subkey,
         loss_labels=loss_labels,
         run=run_name,
         config_string=config_string,
         local=args.local,
+        pretrain=False,
+        key=subkey,
     )
 
     save_model(model, config["checkpoint_dir"])

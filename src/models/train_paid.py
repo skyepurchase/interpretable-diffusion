@@ -41,12 +41,9 @@ def augmentation_loss(
     for param, param_range in zip(phys_params, model.phys_param_ranges):
         key, aug_key = jax.random.split(key, 2)
         aug_param = jax.lax.stop_gradient(
-            (
-                jax.random.randint(aug_key, param.shape, 0, 1000)
-                * (param_range[1] - param_range[0])
-                / 1000
+            jax.random.uniform(
+                aug_key, param.shape, minval=param_range[0], maxval=param_range[1]
             )
-            + param_range[0]
         )
         aug_params.append(aug_param)
 
@@ -208,7 +205,7 @@ def train_step(
         Loss data to be logged
     """
     if not isinstance(model, PAID):
-        raise TypeError(f"Expected model type to be DDIM not {type(model)}")
+        raise TypeError(f"Expected model type to be PAID not {type(model)}")
 
     if len(data.shape) == 3:
         data = jnp.expand_dims(data, 3)

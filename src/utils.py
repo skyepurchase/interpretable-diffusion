@@ -1,22 +1,10 @@
 import re
 from os import PathLike
-from typing import Protocol
 
 import jax
 import yaml
-from flax import nnx
 
 Distribution = tuple[jax.Array, jax.Array]
-
-
-class TrainStep(Protocol):
-    def __call__(
-        self,
-        model: nnx.Module,
-        data: jax.Array,
-        optimizer: nnx.Optimizer,
-        key: jax.Array,
-    ) -> jax.Array: ...
 
 
 def load_config(config_file: PathLike) -> dict:

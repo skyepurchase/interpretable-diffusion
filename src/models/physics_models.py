@@ -122,7 +122,7 @@ def get_physics_model(
     raise NotImplementedError(f"{system} is not implemented.")
 
 
-def get_solver(name: str):
+def get_solver(name: str) -> type[Euler]:
     if name == "euler":
         return Euler
 
