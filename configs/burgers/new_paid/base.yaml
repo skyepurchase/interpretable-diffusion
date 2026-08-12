@@ -1,0 +1,53 @@
+dataset: burgers
+dataset_config:
+  dir: ./data/burgers
+  system: ""
+  batch_size: 32
+  retain_dim: True
+
+model: new_paid
+model_config:
+  augmenter_cfg:
+    hidden_features:
+      - 256
+      - 256
+      - 256
+      - 256
+      - 256
+    act: swish
+
+  mapper_cfg:
+    hid_features:
+      - 256
+      - 256
+    act: swish
+    timesteps: 100
+
+  estimator_cfg:
+    hidden_features:
+      - 256
+      - 256
+      - 256
+    act: swish
+
+  operator: diffusion
+  solver: euler
+
+  x_grid: 128
+  t_grid: 128
+  period: 0.1
+  length: 1.0
+  observed_period: 10
+
+  coeff_ranges:
+    - [0.001, 0.01]
+
+  phys_reg: 1e3
+  aug_reg: 1e2
+
+trainer_config:
+  learning_rate: 1e-3
+  eps: 1e-3
+  epochs: 100
+
+checkpoint_dir: checkpoints/burgers_new_paid
