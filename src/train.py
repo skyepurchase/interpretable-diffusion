@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import DATASETS
+from eval import evaluate
 from models import LOSS_LABELS, MODELS, PRETRAIN_STEPPERS, TRAIN_STEPPERS, save_model
 from utils import load_config
 
@@ -35,7 +36,8 @@ def format_time(seconds):
 def train(
     model: nnx.Module,
     train_step: Callable,
-    dataloader: DataLoader,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
     epochs: int,
     learning_rate: float,
     eps: float = 1e-8,
@@ -54,8 +56,10 @@ def train(
     ----------
     model : nnx.Module
         The model to train
-    dataloader : DataLoader
-        A dataloader for the given dataset
+    train_loader : DataLoader
+        A train_loader for the given dataset
+    val_loader : DataLoader
+        A val_loader for the given dataset
     cfg : TrainerConfig
         Config specifying epochs and learning rate
     key : Array
@@ -77,11 +81,11 @@ def train(
                 "epochs": epochs,
                 "learning_rate": learning_rate,
                 # TODO: pass batch_size here
-                "batch_size": next(iter(dataloader))[0].shape[0],
+                "batch_size": next(iter(train_loader))[0].shape[0],
             },
         )
 
-    optimiser = nnx.Optimizer(model, optax.adam(learning_rate, eps=eps), wrt=nnx.Param)
+    optimizer = nnx.Optimizer(model, optax.adam(learning_rate, eps=eps), wrt=nnx.Param)
 
     final_loss = 0
     best_loss = float("inf")
@@ -95,14 +99,14 @@ def train(
         running_loss = defaultdict(float)
 
         sub_pbar = (
-            tqdm(dataloader, desc="Iterating batches", leave=False)
+            tqdm(train_loader, desc="Iterating batches", leave=False)
             if local
-            else dataloader
+            else train_loader
         )
         for batch, _ in sub_pbar:
             key, train_key = split(key, num=2)
             losses = train_step(
-                model=model, data=batch, optimiser=optimiser, key=train_key
+                model=model, data=batch, optimizer=optimizer, key=train_key
             )
 
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
@@ -114,7 +118,7 @@ def train(
                     ]
 
                 for loss_label, loss in zip(loss_labels, losses):
-                    running_loss[loss_label] += loss.item() / len(dataloader)
+                    running_loss[loss_label] += loss.item() / len(train_loader)
 
         if local:
             trackio.log(running_loss)
@@ -131,14 +135,18 @@ def train(
         if local:
             assert isinstance(pbar, tqdm)  # For type hints
             pbar.set_description(
-                f"{'Pre' if pretrain else ''}Training, loss={running_loss['loss']:.2E}"
+                f"{'Pre' if pretrain else ''}Training, loss={running_loss['loss']:.2E} MAE={running_loss['mae']:.2E}"
             )
 
         final_loss = running_loss["loss"]
     end = time.perf_counter()
 
+    key, eval_key = split(key, num=2)
+    mae = evaluate(model, val_loader, leave=False, key=eval_key)
+
     if local:
         report = f"""# Training report
+    - Final MAE: {mae:.2E}
     - Final loss: {final_loss:.2E}
     - Train time: {format_time(end - start)}
 
@@ -154,6 +162,7 @@ def train(
         print(
             f"""
 # Training Report
+Final MAE: {mae:.2E}
 Final loss: {final_loss:.2E}
 Best loss: {best_loss:.2E}
 Best epoch: {best_epoch}
@@ -174,7 +183,9 @@ if __name__ == "__main__":
     key = PRNGKey(args.seed)
     rngs = nnx.Rngs(args.seed)
 
-    train_loader, _, _ = DATASETS[config["dataset"]](**config["dataset_config"])
+    train_loader, val_loader, _ = DATASETS[config["dataset"]](
+        **config["dataset_config"]
+    )
 
     config_string = yaml.dump(config["dataset_config"], indent=4, sort_keys=False)
 
@@ -216,6 +227,7 @@ if __name__ == "__main__":
         model,
         train_step,
         train_loader,
+        val_loader,
         **config["trainer_config"],
         loss_labels=loss_labels,
         run=run_name,
