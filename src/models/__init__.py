@@ -1,6 +1,5 @@
 import os
 import shutil
-from datetime import datetime
 
 import orbax.checkpoint as ocp
 from flax import nnx
@@ -77,7 +76,7 @@ def load_model(name: str, cfg, checkpoint, rngs: Rngs) -> nnx.Module:
     return nnx.merge(graph, checkpoint_state)
 
 
-def save_model(model: nnx.Module, folder: str) -> None:
+def save_model(model: nnx.Module, folder: str, stamp: str) -> None:
     """Save the given model in the specified folder."""
     if not os.path.isdir(folder):
         os.makedirs(folder)
@@ -86,9 +85,13 @@ def save_model(model: nnx.Module, folder: str) -> None:
 
     # Async used to verify the full save occurs
     checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
-    checkpointer.save(
-        os.path.join(os.getcwd(), folder, datetime.now().strftime("%y%m%d_%H%M")), state
-    )
+
+    perm_path = os.path.join(os.getcwd(), folder, stamp)
+    if os.path.isdir(perm_path):
+        print(f"Unique stamp ({stamp}) already exists. Use a timestamp to avoid this.")
+        print("Skipping permanent saving.")
+    else:
+        checkpointer.save(perm_path, state)
 
     latest_path = os.path.join(os.getcwd(), folder, "latest")
     if os.path.isdir(latest_path):

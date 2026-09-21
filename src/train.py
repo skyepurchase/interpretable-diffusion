@@ -195,12 +195,13 @@ if __name__ == "__main__":
     train_step = TRAIN_STEPPERS[config["model"]]
     loss_labels = LOSS_LABELS[config["model"]]
 
+    stamp = datetime.now().strftime("%m%d-%H%M")
     run_name = "_".join(
         [
             config["model"],
             config["dataset"],
             config["dataset_config"].get("system", ""),
-            datetime.now().strftime("%m%d-%H%M"),
+            stamp,
         ]
     )
     run_name = run_name.replace("__", "_")
@@ -237,4 +238,4 @@ if __name__ == "__main__":
         key=subkey,
     )
 
-    save_model(model, config["checkpoint_dir"])
+    save_model(model, config["checkpoint_dir"], stamp)
