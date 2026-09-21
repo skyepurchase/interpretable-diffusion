@@ -135,14 +135,14 @@ def train(
         if local:
             assert isinstance(pbar, tqdm)  # For type hints
             pbar.set_description(
-                f"{'Pre' if pretrain else ''}Training, loss={running_loss['loss']:.2E} MAE={running_loss['mae']:.2E}"
+                f"{'Pre' if pretrain else ''}Training, loss={running_loss['loss']:.2E}"
             )
 
         final_loss = running_loss["loss"]
     end = time.perf_counter()
 
     key, eval_key = split(key, num=2)
-    mae = evaluate(model, val_loader, leave=False, key=eval_key)
+    mae = evaluate(model, val_loader, local=local, key=eval_key)
 
     if local:
         report = f"""# Training report

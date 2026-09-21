@@ -10,17 +10,19 @@ from visualisers.ddim import generate_images
 def evaluate(
     model: nnx.Module,
     testloader: DataLoader,
-    leave: bool = True,
+    local: bool = False,
     *,
     key: PRNGKeyArray,
 ):
     model.eval()
 
     mae = jnp.zeros((0, 50, 12))
-    for batch, _ in tqdm(testloader, desc="Evaluating", leave=leave):
+    pbar = tqdm(testloader, desc="Evaluating") if local else testloader
+    for batch, _ in pbar:
         preds = generate_images(
             model,
             batch,
+            condition=model.condition,
             sample_method="ddim",
             estimation_type="mean",
             jump=10,
