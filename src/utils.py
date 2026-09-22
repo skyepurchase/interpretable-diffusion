@@ -74,8 +74,8 @@ def load_config(config_file: PathLike) -> dict:
             print("Attempting to parse...")
             return yaml.load(file, Loader=loader)
     except FileNotFoundError:
-        print(f"Provided config file, {config_file} not found")
+        print(f"Provided config file, {config_file}, not found")
         quit()
     except yaml.YAMLError:
-        print("Error processing the config file. Verify the YAML formatting")
+        print("Error processing the config file. Verify the YAML formatting.")
         quit()

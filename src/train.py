@@ -90,20 +90,21 @@ def train(
     final_loss = 0
     best_loss = float("inf")
     best_epoch = 0
-    print("\nStarting training steps\n")
 
     pbar = tqdm(range(epochs)) if local else range(epochs)
+
+    print("\nStarting training steps...\n")
 
     start = time.perf_counter()
     for epoch in pbar:
         running_loss = defaultdict(float)
 
-        sub_pbar = (
-            tqdm(train_loader, desc="Iterating batches", leave=False)
+        train_pbar = (
+            tqdm(train_loader, desc="Train batches", leave=False)
             if local
             else train_loader
         )
-        for batch, _ in sub_pbar:
+        for batch, _ in train_pbar:
             key, train_key = split(key, num=2)
             losses = train_step(
                 model=model, data=batch, optimizer=optimizer, key=train_key
@@ -135,7 +136,7 @@ def train(
         if local:
             assert isinstance(pbar, tqdm)  # For type hints
             pbar.set_description(
-                f"{'Pre' if pretrain else ''}Training, loss={running_loss['loss']:.2E}"
+                f"{'Pre' if pretrain else ''}Training, loss={running_loss['loss']:.2E}, val_loss={running_loss['val_loss']:.2E}"
             )
 
         final_loss = running_loss["loss"]
@@ -178,7 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("--local", action="store_true")
     args = parser.parse_args()
     config = load_config(args.config)
-    print("\nConfig loaded...")
+    print("\nConfig loaded.")
 
     key = PRNGKey(args.seed)
     rngs = nnx.Rngs(args.seed)
@@ -206,7 +207,7 @@ if __name__ == "__main__":
     )
     run_name = run_name.replace("__", "_")
 
-    print("\nSetup complete...")
+    print("\nSetup complete.")
 
     if pretrain_step is not None:
         key, subkey = split(key)

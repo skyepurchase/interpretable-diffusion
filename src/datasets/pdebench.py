@@ -34,7 +34,7 @@ class PDEBenchDataset(Dataset):
 
     def __init__(self, data_file: str, test: bool = False) -> None:
         if not os.path.isfile(data_file):
-            print(f"File {data_file} was not found")
+            print(f"File {data_file} was not found.")
             quit(1)
 
         self.data = torch.empty(0)
@@ -120,8 +120,6 @@ class DiffusionSorptionDataset(PDEBenchDataset):
         self.ds = ds
         self.t = torch.tensor(t)
         self.data = torch.vstack(data)
-
-        print(self.data.shape)
 
 
 class BurgersDataset(PDEBenchDataset):

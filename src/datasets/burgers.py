@@ -188,7 +188,7 @@ def get_burgers(
         if not os.path.isdir(os.path.join(dir, system)):
             os.makedirs(os.path.join(dir, system))
 
-        print("\nSaving generated dataset")
+        print("\nSaving generated dataset...")
 
         jnp.save(os.path.join(dir, system, "test"), test, allow_pickle=False)
         jnp.save(os.path.join(dir, system, "val"), validation, allow_pickle=False)
