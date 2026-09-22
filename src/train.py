@@ -121,6 +121,25 @@ def train(
                 for loss_label, loss in zip(loss_labels, losses):
                     running_loss[loss_label] += loss.item() / len(train_loader)
 
+        model.eval()
+        val_pbar = (
+            tqdm(val_loader, desc="Validation batches", leave=False)
+            if local
+            else val_loader
+        )
+        for batch, _ in val_pbar:
+            key, val_key = split(key, num=2)
+            losses = train_step(
+                model=model, data=batch, optimizer=optimizer, key=val_key
+            )
+
+            assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
+
+            if local:
+                running_loss["val_loss"] += losses[0].item() / len(val_loader)
+
+        model.train()
+
         if local:
             trackio.log(running_loss)
 
