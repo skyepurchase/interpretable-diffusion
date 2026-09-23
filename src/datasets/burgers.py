@@ -75,7 +75,7 @@ def generate_burgers_data(
     waves: int = 4,
     *,
     key: PRNGKeyArray,
-) -> Array:
+) -> tuple[Array, Array]:
     """
     Using the Burgers equation PDE generate a set of randomly initialised samples.
 
@@ -145,7 +145,7 @@ def generate_burgers_data(
         axis=1,
     )
 
-    return samples
+    return samples, nu
 
 
 def get_burgers(
@@ -170,11 +170,18 @@ def get_burgers(
     if not all(
         [
             os.path.exists(os.path.join(dir, system, file))
-            for file in ["test.npy", "val.npy", "train_pool.npy"]
+            for file in [
+                "test.npy",
+                "test_coeff.npy",
+                "val.npy",
+                "val_coeff.npy",
+                "train_pool.npy",
+                "train_coeff.npy",
+            ]
         ]
     ):
         key, gen_key = jax.random.split(key)
-        samples = generate_burgers_data(
+        samples, coeffs = generate_burgers_data(
             n_samples, t_grid=t_grid, x_grid=x_grid, key=gen_key
         )
         assert samples.shape == (n_samples, x_grid + 1, t_grid), (
@@ -182,8 +189,11 @@ def get_burgers(
         )
 
         test = samples[:test_split]
+        test_coeff = coeffs[:test_split]
         validation = samples[test_split : test_split + validation_split]
+        val_coeff = coeffs[test_split : test_split + validation_split]
         train_pool = samples[test_split + validation_split :]
+        train_coeff = coeffs[test_split + validation_split :]
 
         if not os.path.isdir(os.path.join(dir, system)):
             os.makedirs(os.path.join(dir, system))
@@ -191,16 +201,26 @@ def get_burgers(
         print("\nSaving generated dataset...")
 
         jnp.save(os.path.join(dir, system, "test"), test, allow_pickle=False)
+        jnp.save(
+            os.path.join(dir, system, "test_coeff"), test_coeff, allow_pickle=False
+        )
         jnp.save(os.path.join(dir, system, "val"), validation, allow_pickle=False)
+        jnp.save(os.path.join(dir, system, "val_coeff"), val_coeff, allow_pickle=False)
         jnp.save(
             os.path.join(dir, system, "train_pool"),
             train_pool,
             allow_pickle=False,
         )
+        jnp.save(
+            os.path.join(dir, system, "train_coeff"), train_coeff, allow_pickle=False
+        )
     else:
         test = jnp.load(os.path.join(dir, system, "test.npy"))
+        test_coeff = jnp.load(os.path.join(dir, system, "test_coeff.npy"))
         validation = jnp.load(os.path.join(dir, system, "val.npy"))
+        val_coeff = jnp.load(os.path.join(dir, system, "val_coeff.npy"))
         train_pool = jnp.load(os.path.join(dir, system, "train_pool.npy"))
+        train_coeff = jnp.load(os.path.join(dir, system, "train_coeff.npy"))
 
         assert test.shape == (test_split, x_grid + 1, t_grid), (
             f"Loaded test set has shape {test.shape} expected {(test_split, x_grid + 1, t_grid)} according to config"
@@ -213,10 +233,14 @@ def get_burgers(
         )
 
     key, perm_key = jax.random.split(key)
-    test_dataset = PiVAEDataset(test, retain_dim)
-    validation_dataset = PiVAEDataset(validation, retain_dim)
+    train_perm = jax.random.permutation(perm_key, jnp.arange(train_pool.shape[0]))[
+        :train_split
+    ]
+
+    test_dataset = PiVAEDataset(test, test_coeff, retain_dim)
+    validation_dataset = PiVAEDataset(validation, val_coeff, retain_dim)
     train_dataset = PiVAEDataset(
-        jax.random.permutation(perm_key, train_pool)[:train_split], retain_dim
+        train_pool[train_perm], train_coeff[train_perm], retain_dim
     )
 
     train_loader = DataLoader(

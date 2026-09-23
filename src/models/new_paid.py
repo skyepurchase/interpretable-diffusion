@@ -1,10 +1,10 @@
 import jax
 import jax.numpy as jnp
 from diffrax import Euler, ODETerm, SaveAt, diffeqsolve
-from diffuse.neural_network.nn import CondUNet2D
 from flax import nnx
 from jaxtyping import Array
 
+from diffuse.neural_network.nn import CondUNet
 from models.mlp import Mlp
 from models.modules.acts import ACTS
 from models.physics_models import Operator, get_physics_model, get_solver
@@ -104,7 +104,7 @@ class FlowModel2D(FlowModel):
 
         self.act = ACTS[activation]
 
-        self.unet = CondUNet2D(
+        self.unet = CondUNet(
             in_channels=in_channels,
             ch=base_channel,
             ch_mult=ch_mult,
