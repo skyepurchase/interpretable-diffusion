@@ -61,7 +61,7 @@ def make_ddpm_step(
         alpha_tm1 = alphas[t - 1].reshape(shape)
 
         pred = model(
-            jnp.pad(x_t, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
+            jnp.pad(x_t, ((0, 0), *model.pad, (0, 0))),
             t,
         )
         pred = remove_padding(pred, model.pad)

@@ -5,11 +5,11 @@ import jax
 import jax.numpy as jnp
 from diffrax import AbstractSolver, ODETerm, SaveAt, diffeqsolve
 from diffrax._custom_types import RealScalarLike
-from diffuse.neural_network.blocks import ResnetBlock
-from diffuse.neural_network.nn import CondUNet2D
 from flax import nnx
 from jaxtyping import PyTree
 
+from diffuse.neural_network.blocks import ResnetBlock
+from diffuse.neural_network.nn import CondUNet
 from models.ddim import compute_betas
 from models.mlp import make_mlp
 from models.modules.acts import ACTS
@@ -62,6 +62,8 @@ class PhysUNet2D(nnx.Module):
         self.pde_dim = pde_dim
         self.time_dim = time_dim
 
+        self.dimension = 2 if self.num_grid_points > 1 else 1
+
         self.physics_model = physics_model
         self.solver = solver
 
@@ -70,26 +72,36 @@ class PhysUNet2D(nnx.Module):
         unet_config["activation"] = ACTS[
             unet_config["activation"]
         ]  # Convert to function
-        self.unet = CondUNet2D(**unet_config, rngs=rngs)
+        self.unet = CondUNet(**unet_config, dimension=self.dimension, rngs=rngs)
         unet_latent_features = unet_config["ch_mult"][-1] * unet_config["ch"]
 
         # Auxiliary functions
         aux_dims = []
         halving = 2 ** (len(unet_config["ch_mult"]) - 1)
-        flat_dim_base = ((self.num_grid_points + sum(self.pad[1])) // halving) * (
-            (self.time_dim + sum(self.pad[0])) // halving
-        )
+
+        if self.dimension == 2:
+            flat_dim_base = ((self.num_grid_points + sum(self.pad[1])) // halving) * (
+                (self.time_dim + sum(self.pad[0])) // halving
+            )
+        elif self.dimension == 1:
+            flat_dim_base = (self.time_dim + sum(self.pad[0])) // halving
+        else:
+            raise NotImplementedError(
+                f"Dimension of {self.dimension} is not supported."
+            )
+
         self.aux_funcs = nnx.List()
         for aux_cfg in aux_funcs:
             flat_dim = flat_dim_base * aux_cfg["features"]
             aux_func = nnx.Sequential(
                 ResnetBlock(
-                    unet_latent_features,
-                    aux_cfg["features"],
-                    ACTS[aux_cfg["act"]],
+                    in_channels=unet_latent_features,
+                    out_channels=aux_cfg["features"],
+                    activation=ACTS[aux_cfg["act"]],
                     embedding_dim=aux_cfg.get("time_dim"),
                     dropout=aux_cfg["dropout"],
                     dropout_rate=aux_cfg["dropout_rate"],
+                    dimension=self.dimension,
                     rngs=rngs,
                 ),
                 ACTS[aux_cfg["act"]],
@@ -104,9 +116,9 @@ class PhysUNet2D(nnx.Module):
         self.unmixer_conv = nnx.Conv(
             in_features=latent_dims + 1,
             out_features=unmixer["dims"][0],
-            kernel_size=(3, 3),
-            strides=(1, 1),
-            padding=(1, 1),
+            kernel_size=(3,) * self.dimension,
+            strides=(1,) * self.dimension,
+            padding=(1,) * self.dimension,
             rngs=rngs,
         )
         self.unmixer = nnx.List([])
@@ -119,6 +131,7 @@ class PhysUNet2D(nnx.Module):
                     embedding_dim=unmixer.get("time_dim"),
                     dropout=unmixer["dropout"],
                     dropout_rate=unmixer["dropout_rate"],
+                    dimension=self.dimension,
                     rngs=rngs,
                 )
             )
@@ -126,9 +139,9 @@ class PhysUNet2D(nnx.Module):
         self.unmixer_out = nnx.Conv(
             in_features=unmixer["dims"][-1],
             out_features=1,
-            kernel_size=(3, 3),
-            strides=(1, 1),
-            padding=(1, 1),
+            kernel_size=(3,) * self.dimension,
+            strides=(1,) * self.dimension,
+            padding=(1,) * self.dimension,
             rngs=rngs,
         )
 
@@ -141,12 +154,13 @@ class PhysUNet2D(nnx.Module):
             flat_dim = flat_dim_base * phys_cfg["features"]
             phys_func = nnx.Sequential(
                 ResnetBlock(
-                    unet_latent_features,
-                    phys_cfg["features"],
-                    ACTS[phys_cfg["act"]],
+                    in_channels=unet_latent_features,
+                    out_channels=phys_cfg["features"],
+                    activation=ACTS[phys_cfg["act"]],
                     embedding_dim=phys_cfg.get("time_dim"),
                     dropout=phys_cfg["dropout"],
                     dropout_rate=phys_cfg["dropout_rate"],
+                    dimension=self.dimension,
                     rngs=rngs,
                 ),
                 ACTS[phys_cfg["act"]],
@@ -179,9 +193,9 @@ class PhysUNet2D(nnx.Module):
                 nnx.Conv(
                     in_features=2 + func_cfg["latent_dim"],
                     out_features=func_cfg["features"],
-                    kernel_size=(3, 3),
-                    strides=(1, 1),
-                    padding=(1, 1),
+                    kernel_size=(3,) * self.dimension,
+                    strides=(1,) * self.dimension,
+                    padding=(1,) * self.dimension,
                     rngs=rngs,
                 ),
                 nnx.GroupNorm(
@@ -192,9 +206,9 @@ class PhysUNet2D(nnx.Module):
                 nnx.Conv(
                     in_features=func_cfg["features"],
                     out_features=1,
-                    kernel_size=(3, 3),
-                    strides=(1, 1),
-                    padding=(1, 1),
+                    kernel_size=(3,) * self.dimension,
+                    strides=(1,) * self.dimension,
+                    padding=(1,) * self.dimension,
                     rngs=rngs,
                 ),
             )
@@ -251,8 +265,10 @@ class PhysUNet2D(nnx.Module):
                 [
                     x,
                     jnp.tile(
-                        jnp.expand_dims(full_aux, axis=[1, 2]),
-                        [1, x.shape[1], x.shape[2], 1],
+                        jnp.expand_dims(
+                            full_aux, axis=list(range(1, self.dimension + 1))
+                        ),
+                        [1, *x.shape[1 : self.dimension + 1], 1],
                     ),
                 ],
                 axis=-1,
@@ -384,7 +400,7 @@ class PhysUNet2D(nnx.Module):
         # init_cond : ^(B*n, X*D)
         init_cond = jnp.tile(
             jnp.pad(
-                remove_padding(x, self.pad)[:, 0, :, 0],
+                remove_padding(x, self.pad)[:, 0].reshape(-1, self.num_grid_points),
                 ((0, 0), (0, self.pde_dim - self.num_grid_points)),
             ),
             reps=(pre_combs, 1),
@@ -403,20 +419,20 @@ class PhysUNet2D(nnx.Module):
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
 
-        # phys_x_hat : ^(n, B, T, X, 1)
-        phys_x_hat = jnp.expand_dims(
-            # ^(n, B, T, X)
-            jnp.reshape(
-                # ^(T, B*n, X*D) => ^(B*n, T, X)
-                jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
-                (pre_combs, -1, self.time_dim, self.num_grid_points),
-            ),
-            axis=-1,
+        # ^(n, B, T, X)
+        phys_x_hat = jnp.reshape(
+            # ^(T, B*n, X*D) => ^(B*n, T, X)
+            jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
+            (pre_combs, -1, self.time_dim, self.num_grid_points),
         )
+        if self.dimension == 2:
+            # phys_x_hat : ^(n, B, T, X, 1)
+            phys_x_hat = jnp.expand_dims(phys_x_hat, axis=-1)
+
         # phys_x_hat : (m, B, T, X, 1)
         phys_x_hat = jnp.pad(
-            jnp.tile(phys_x_hat, [post_combs, 1, 1, 1, 1]),
-            [(0, 0), (0, 0), self.pad[0], self.pad[1], (0, 0)],
+            jnp.tile(phys_x_hat, [post_combs, *((1,) * (self.dimension + 2))]),
+            [(0, 0), (0, 0), *self.pad, (0, 0)],
         )
 
         assert x_hat.shape == phys_x_hat.shape[1:], (
@@ -430,13 +446,13 @@ class PhysUNet2D(nnx.Module):
         ):
             # z_expanded : (B, T, X, Z)
             z_expanded = jnp.tile(
-                jnp.expand_dims(z_aux, axis=[1, 2]),
-                [1, x_hat.shape[1], x_hat.shape[2], 1],
+                jnp.expand_dims(z_aux, axis=list(range(1, self.dimension + 1))),
+                [1, *x.shape[1 : self.dimension + 1], 1],
             )
 
             def apply_func(phys, apply):
                 return (1 - apply) * phys + apply * post_func(
-                    jnp.concatenate([x_hat, phys, z_expanded], axis=3)
+                    jnp.concatenate([x_hat, phys, z_expanded], axis=-1)
                 )
 
             # phys_x_hat : (m, B, T, X, 1)
@@ -462,13 +478,21 @@ class PhysUNet2D(nnx.Module):
         x_hat : Array (B, W, H, C) padded
             Estimation of the clean x
         """
-        assert x.shape[1:] == (
-            self.time_dim + sum(self.pad[0]),
-            self.num_grid_points + sum(self.pad[1]),
-            1,
-        ), (
-            f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, {self.num_grid_points + sum(self.pad[1])}, 1)"
-        )
+        if self.dimension == 2:
+            assert x.shape[1:] == (
+                self.time_dim + sum(self.pad[0]),
+                self.num_grid_points + sum(self.pad[1]),
+                1,
+            ), (
+                f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, {self.num_grid_points + sum(self.pad[1])}, 1)"
+            )
+        elif self.dimension == 1:
+            assert x.shape[1:] == (
+                self.time_dim + sum(self.pad[0]),
+                1,
+            ), (
+                f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, 1)"
+            )
 
         x_hat, aux_latents, phys_latents, _ = self._embed(x, tau)
 
@@ -506,13 +530,21 @@ class PhysUNet2D(nnx.Module):
         phys_params : list[Array (B, Z)]
             Estimation of physics parameters
         """
-        assert x.shape[1:] == (
-            self.time_dim + sum(self.pad[0]),
-            self.num_grid_points + sum(self.pad[1]),
-            1,
-        ), (
-            f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, {self.num_grid_points + sum(self.pad[1])}, 1)"
-        )
+        if self.dimension == 2:
+            assert x.shape[1:] == (
+                self.time_dim + sum(self.pad[0]),
+                self.num_grid_points + sum(self.pad[1]),
+                1,
+            ), (
+                f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, {self.num_grid_points + sum(self.pad[1])}, 1)"
+            )
+        elif self.dimension == 1:
+            assert x.shape[1:] == (
+                self.time_dim + sum(self.pad[0]),
+                1,
+            ), (
+                f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, 1)"
+            )
 
         # x_hat : (B, T, X, 1)
         h, aux_latents, phys_params, phys_sig = self._embed(x, tau)
@@ -528,7 +560,7 @@ class PhysUNet2D(nnx.Module):
             self.post_selections,
         )
 
-        assert len(x_hat.shape) == 5, (
+        assert len(x_hat.shape) == self.dimension + 3, (
             "Internal issue with generation should return combination solution."
         )
         assert x_hat.shape[0] == self.pre_combs * self.post_combs, (
@@ -623,6 +655,7 @@ class PAID(nnx.Module):
         self.condition = condition
         self.phys_param_ranges = pde["phys_param_ranges"]
         self.pad = pad
+        self.dimension = self.denoiser.dimension
 
     def __call__(self, x: jax.Array, t: jax.Array) -> jax.Array:
         return self.denoiser.forward(x, t)
@@ -662,15 +695,14 @@ class PAID(nnx.Module):
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
 
-        # gen_phys : ^(B, T, X, 1)
-        gen_phys = jnp.expand_dims(
-            # ^(B, T, X)
-            jnp.reshape(
-                # ^(T, B, X*D) => ^(B, T, X)
-                jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
-                (-1, self.time_dim, self.num_grid_points),
-            ),
-            axis=-1,
+        # ^(B, T, X)
+        gen_phys = jnp.reshape(
+            # ^(T, B, X*D) => ^(B, T, X)
+            jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
+            (-1, self.time_dim, self.num_grid_points),
         )
+        if self.dimension == 2:
+            # gen_phys : ^(B, T, X, 1)
+            gen_phys = jnp.expand_dims(gen_phys, axis=-1)
 
         return gen_phys

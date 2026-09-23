@@ -58,9 +58,7 @@ def augmentation_loss(
 
     aug_loss = jnp.zeros(())
     for phys_func, aug_param in zip(model.denoiser.phys_funcs, aug_params):
-        phys_features = jnp.pad(
-            aug_phys_hat, [(0, 0), model.pad[0], model.pad[1], (0, 0)]
-        )
+        phys_features = jnp.pad(aug_phys_hat, [(0, 0), *model.pad, (0, 0)])
         for block in model.denoiser.unet.blocks_down:
             phys_features = block(phys_features, t_emb)
 
@@ -92,7 +90,7 @@ def discrepancy_loss(x_hats: jax.Array) -> jax.Array:
         # x : (B, W, H, C)
         lambda x: jax.vmap(
             # y : (B, W, H, C)
-            lambda y: jnp.square(x - y).sum((1, 2, 3)),
+            lambda y: jnp.square(x - y).sum(tuple(range(1, x.ndim))),
             in_axes=0,
             out_axes=0,
         )(x_hats[:-1]),
@@ -135,14 +133,15 @@ def loss_fn(
     )
     tau = jnp.concatenate([tau, model.num_timesteps - tau - 1], axis=0)[:batch_size]
 
-    alpha = (1 - model.betas).cumprod(axis=0)[tau].reshape(-1, 1, 1, 1)
+    alpha_shape = (-1,) + (1,) * (data.ndim - 1)
+    alpha = (1 - model.betas).cumprod(axis=0)[tau].reshape(*alpha_shape)
     noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
     x = jnp.concatenate(
         [data[:, : model.condition], noisy_x[:, model.condition :]], axis=1
     )
 
     x_hat, phys_pred, phys_params = model.denoiser.full_forward(
-        jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), tau
+        jnp.pad(x, [(0, 0), *model.pad, (0, 0)]), tau
     )
 
     phys_pred = remove_padding(phys_pred, model.pad)
@@ -151,17 +150,17 @@ def loss_fn(
 
     reconstruction_loss = (
         # Reconstruct the full data to improve smoothness
-        jnp.square((data - x_hat[-1])).sum(axis=(1, 2, 3)).mean()
+        jnp.square((data - x_hat[-1])).sum(axis=tuple(range(1, data.ndim))).mean()
     )
 
-    phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen)).sum(axis=3)
+    phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen)).sum(axis=-1)
     phys_loss = (
         model.phys_reg
         * (
-            phys_error[:, : model.condition].sum(axis=(1, 2))
-            + (jnp.reshape(alpha, (-1, 1, 1)) * phys_error[:, model.condition :]).sum(
-                axis=(1, 2)
-            )
+            phys_error[:, : model.condition].sum(axis=tuple(range(1, data.ndim - 1)))
+            + (
+                jnp.reshape(alpha, alpha_shape[:-1]) * phys_error[:, model.condition :]
+            ).sum(axis=tuple(range(1, data.ndim - 1)))
         ).mean()
     )
 
@@ -169,7 +168,11 @@ def loss_fn(
 
     key, aug_key = jax.random.split(key, 2)
     aug_loss = model.aug_reg * augmentation_loss(
-        model, phys_params, data[:, 0, :, 0], tau, key=aug_key
+        model,
+        phys_params,
+        data[:, 0].reshape(-1, model.num_grid_points),
+        tau,
+        key=aug_key,
     )
 
     full_loss = reconstruction_loss + phys_loss + disc_loss + aug_loss
@@ -207,8 +210,8 @@ def train_step(
     if not isinstance(model, PAID):
         raise TypeError(f"Expected model type to be PAID not {type(model)}")
 
-    if len(data.shape) == 3:
-        data = jnp.expand_dims(data, 3)
+    if len(data.shape) < model.dimension + 2:
+        data = jnp.expand_dims(data, -1)
     elif len(data.shape) < 3:
         raise ValueError(
             f"Data array incorrect shape. Expected 3 or 4 dimensions received {len(data.shape)}"

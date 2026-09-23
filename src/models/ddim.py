@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
-from diffuse.neural_network.nn import CondUNet2D
 from flax import nnx
 
+from diffuse.neural_network.nn import CondUNet
 from models.modules.acts import ACTS
 
 
@@ -31,12 +31,12 @@ def compute_betas(
 
 class DDIM(nnx.Module):
     """
-    A wrapper for jcopo/diffuse CondUNet2D
+    A wrapper for jcopo/diffuse CondUNet
 
     Parameters
     ----------
     cfg : DDIMConfig
-        The configuration for the CondUNet2D
+        The configuration for the CondUNet
     rngs : nnx.Rngs
         A PRNG key
     """
@@ -65,7 +65,7 @@ class DDIM(nnx.Module):
             beta_schedule, beta_start, beta_end, self.num_timesteps
         )
 
-        self.denoiser = CondUNet2D(
+        self.denoiser = CondUNet(
             in_channels=in_features,
             ch=base_features,
             ch_mult=feature_multiples,
