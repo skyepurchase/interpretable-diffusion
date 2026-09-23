@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 import numpy as np
+from jaxtyping import PRNGKeyArray
 from numpy.typing import NDArray
 from PIL.Image import Image
 from torch.utils.data import DataLoader, random_split
@@ -23,7 +24,7 @@ def normalise_cast(img: Image) -> NDArray:
 
 
 def get_MNIST(
-    dir: str, batch_size: int = 128, download: bool = False
+    dir: str, batch_size: int = 128, download: bool = False, *, key: PRNGKeyArray
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Create MNIST train, val and test dataloaders"""
     train_and_val = MNIST(dir, download=download, transform=normalise_cast)

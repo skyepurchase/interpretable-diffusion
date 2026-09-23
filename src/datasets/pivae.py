@@ -121,9 +121,7 @@ def generate_pendulum_data(
         raise RuntimeError("ODE solution returned None")
 
     # samples : (B, 1, T)
-    samples = jnp.permute_dims(sol, (1, 2, 0))[:, :1]
-
-    return samples, omega
+    return jnp.permute_dims(sol, (1, 2, 0))[:, :1], omega
 
 
 def diffusion_PDE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]:
@@ -215,14 +213,139 @@ def generate_diffusion_data(
     if sol is None:
         raise RuntimeError("ODE solution returned None")
 
-    samples = jnp.permute_dims(sol, (1, 2, 0))
+    return jnp.permute_dims(sol, (1, 2, 0)), b
 
-    return samples, b
+
+def burgers_ODE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]:
+    """
+    Create the Burgers equation PDE randomly sampling coefficients. Returns a function that can be utilisied by an ODE solver.
+
+    Parameters
+    ----------
+    ds : float
+        The discretisation size
+
+    Returns
+    -------
+    func : (t, y, nu) -> dy
+        The function that progresses y according to the ODE.
+    """
+
+    def step(_t: RealScalarLike, y: PyTree, nu: PyTree) -> PyTree:
+        assert len(y.shape) == 2, (
+            f"Expected y to have shape (B, L) but received {y.shape}."
+        )
+        assert y.shape[0] == nu.shape[0], (
+            f"Expected y and nu to have the same batch size, {y.shape[0]} != {nu.shape[0]}"
+        )
+
+        # Periodic boundary condition
+        looped_y = jnp.concatenate([y[:, -2:], y, y[:, :2]], axis=1)
+
+        # Diffusion term
+        dy_ds = jnp.gradient(looped_y, ds, axis=1)
+        assert not isinstance(dy_ds, list), (
+            f"Expected dy_ds to be Array but found {type(dy_ds)}"
+        )
+        d2y_ds2 = jnp.gradient(dy_ds, ds, axis=1)
+        assert not isinstance(d2y_ds2, list), (
+            f"Expected d2y_ds2 to be Array but found {type(d2y_ds2)}"
+        )
+
+        # Finite volume flux
+        mean_flux = jnp.square(looped_y) / 2
+        sign = jnp.pad((looped_y[:, :-1] + looped_y[:, 1:]) / 2, ((0, 0), (1, 1)))
+        flux_interface = jnp.pad(
+            jnp.where(sign[:, 1:-1] > 0, mean_flux[:, :-1], mean_flux[:, 1:]),
+            ((0, 0), (1, 1)),
+        )
+
+        # Viscous Burgers
+        looped_dy_dt = (nu * d2y_ds2) + (
+            flux_interface[:, :-1] - flux_interface[:, 1:]
+        ) / ds
+
+        return looped_dy_dt[:, 2:-2]
+
+    return step
+
+
+def generate_burgers_data(
+    n_samples: int,
+    t_grid: int = 128,
+    x_grid: int = 128,
+    T: float = 0.1,
+    L: float = 1.0,
+    waves: int = 4,
+    *,
+    key: PRNGKeyArray,
+) -> tuple[Array, Array]:
+    """
+    Using the Burgers equation PDE generate a set of randomly initialised samples.
+
+    Parameters
+    ----------
+    n_samples : int = 3500
+        The number of samples to generate
+    t_grid : int = 128
+        The temporal grid size
+    x_grid : int = 128
+        The spatial grid size
+    T : float = 0.1
+        The final time period
+    L : float = 1.0
+        The length of the space
+    waves : int = 4
+        The maximum number of waves in the input
+
+    Returns
+    -------
+    samples : (B, T, L + 1)
+        B samples with T timesteps including both the timestep and the value.
+    """
+    t = jnp.linspace(0, T, t_grid)
+    dt = t[1] - t[0]
+    s = jnp.linspace(0, L, x_grid, endpoint=False)
+    ds = s[1] - s[0]
+
+    y = jnp.zeros((n_samples, x_grid))
+    for _ in range(2):
+        key, amp_key, freq_key, phase_key = jax.random.split(key, num=4)
+
+        amp = jax.random.uniform(amp_key, (n_samples, 1), minval=0, maxval=1)
+        freq = (
+            2
+            * jnp.pi
+            * jax.random.randint(freq_key, (n_samples, 1), minval=1, maxval=waves)
+            / L
+        )
+        phi = jax.random.uniform(phase_key, (n_samples, 1), minval=0, maxval=2 * jnp.pi)
+
+        amp_cast = jnp.tile(amp, reps=(1, x_grid))
+        phi_cast = jnp.tile(phi, reps=(1, x_grid))
+
+        y += amp_cast * jnp.sin((freq * s[None, :]) + phi_cast)
+
+    ode = burgers_ODE(ds)
+
+    key, nu_key = jax.random.split(key)
+    nu = jax.random.uniform(nu_key, (n_samples, 1), minval=0.001, maxval=0.01)
+
+    # sol : (T, B, X)
+    sol = diffeqsolve(
+        ODETerm(ode), Euler(), t0=0, t1=T, dt0=dt, y0=y, args=nu, saveat=SaveAt(ts=t)
+    ).ys
+    if sol is None:
+        raise RuntimeError("ODE solution returned None")
+
+    # samples : (B, X + 1, T)
+    return jnp.permute_dims(sol, (1, 2, 0)), nu
 
 
 SYSTEMS = {
     "pendulum": generate_pendulum_data,
     "diffusion": generate_diffusion_data,
+    "burgers": generate_burgers_data,
 }
 
 
@@ -237,11 +360,11 @@ def get_pivae(
     x_grid: int = 12,
     batch_size: int = 128,
     retain_dim: bool = False,
+    *,
+    key: PRNGKeyArray,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Create pivae train, val, and test dataloaders"""
     assert test_split + validation_split + train_split <= n_samples
-
-    key = jax.random.key(0)
 
     if not all(
         [
@@ -263,8 +386,8 @@ def get_pivae(
         samples, coeffs = SYSTEMS[system](
             n_samples, t_grid=t_grid, x_grid=x_grid, key=sample_key
         )
-        assert samples.shape == (n_samples, samples.shape[1], 50), (
-            f"Expected shape {(n_samples, samples.shape[1], 50)} but received {samples.shape}"
+        assert samples.shape == (n_samples, x_grid, t_grid), (
+            f"Expected shape {(n_samples, x_grid, t_grid)} but received {samples.shape}"
         )
 
         test = samples[:test_split]

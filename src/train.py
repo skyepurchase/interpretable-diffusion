@@ -9,7 +9,7 @@ import optax
 import trackio
 import yaml
 from flax import nnx
-from jax.random import PRNGKey, split
+from jax.random import split
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -200,11 +200,11 @@ if __name__ == "__main__":
     config = load_config(args.config)
     print("\nConfig loaded.")
 
-    key = PRNGKey(args.seed)
+    key = jax.random.key(args.seed)
     rngs = nnx.Rngs(args.seed)
 
     train_loader, val_loader, _ = DATASETS[config["dataset"]](
-        **config["dataset_config"]
+        **config["dataset_config"], key=key
     )
 
     config_string = yaml.dump(config["dataset_config"], indent=4, sort_keys=False)

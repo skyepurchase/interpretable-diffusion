@@ -2,10 +2,10 @@ import os
 from argparse import ArgumentParser
 from datetime import datetime
 
+import jax
 import matplotlib.pyplot as plt
 import seaborn as sns
 from flax import nnx
-from jax.random import PRNGKey
 
 from datasets import DATASETS
 from models import load_model
@@ -93,7 +93,7 @@ def visualise(
     """
     print("Setting up visualisation...\n")
     rngs = nnx.Rngs(seed)
-    key = PRNGKey(seed)
+    key = jax.random.key(seed)
 
     if not os.path.isdir(folder):
         os.makedirs(folder)

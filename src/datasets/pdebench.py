@@ -3,6 +3,7 @@ import os
 import h5py
 import numpy as np
 import torch
+from jaxtyping import PRNGKeyArray
 from torch.utils import data
 from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets.utils import download_url
@@ -174,6 +175,8 @@ def get_pdebench(
     dir: str,
     system: str,
     batch_size: int = 128,
+    *,
+    key: PRNGKeyArray,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     if system not in SYSTEM_TO_DIR:
         print(f"{system} is not supported.")
