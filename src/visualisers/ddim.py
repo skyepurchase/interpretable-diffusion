@@ -200,8 +200,7 @@ def generate_images(
 
     model.eval()
 
-    if len(input.shape) < model.dimension + 2:
-        input = jnp.expand_dims(input, axis=-1)
+    assert len(input.shape) == model.dimension + 2
 
     n_samples = input.shape[0]
 

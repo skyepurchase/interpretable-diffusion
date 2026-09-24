@@ -19,10 +19,13 @@ def evaluate(
     assert isinstance(model, PAID), f"{type(model)} is not supported."
     model.eval()
 
-    forecast_mae = jnp.zeros((0, model.time_dim, model.num_grid_points))
+    forecast_mae = None
     coeff_mae = jnp.zeros((0, 1))
     pbar = tqdm(testloader, desc="Evaluating") if local else testloader
     for batch, coeffs in pbar:
+        if len(batch.shape) < model.dimension + 2:
+            batch = jnp.expand_dims(batch, axis=-1)
+
         forecast = generate_images(
             model,
             batch,
@@ -38,9 +41,15 @@ def evaluate(
             jnp.zeros((batch.shape[0], 1)),
         )
 
-        forecast_mae = jnp.concatenate([forecast_mae, jnp.absolute(forecast - batch)])
+        if forecast_mae is None:
+            forecast_mae = jnp.absolute(forecast - batch)
+        else:
+            forecast_mae = jnp.concatenate(
+                [forecast_mae, jnp.absolute(forecast - batch)]
+            )
         coeff_mae = jnp.concatenate([coeff_mae, jnp.absolute(preds[0] - coeffs)])
 
+    assert forecast_mae is not None  # typing
     return forecast_mae.mean().item(), coeff_mae.mean().item()
 
 
@@ -81,5 +90,6 @@ if __name__ == "__main__":
         **config["dataset_config"], key=data_key
     )
 
+    forecast, coeff = evaluate(model, test_loader, args.local, key=key)
     print()
-    print(evaluate(model, test_loader, args.local, key=key))
+    print(f"\nForecast error: {forecast:.2E}, coefficient error: {coeff:.2E}")
