@@ -162,11 +162,12 @@ def train(
     end = time.perf_counter()
 
     key, eval_key = split(key, num=2)
-    mae = evaluate(model, val_loader, local=local, key=eval_key)
+    forecast_mae, coeff_mae = evaluate(model, val_loader, local=local, key=eval_key)
 
     if local:
         report = f"""# Training report
-    - Final MAE: {mae:.2E}
+    - Mean absolute error: {forecast_mae:.2E}
+    - Coefficient error: {coeff_mae:.2E}
     - Final loss: {final_loss:.2E}
     - Train time: {format_time(end - start)}
 
@@ -182,7 +183,8 @@ def train(
         print(
             f"""
 # Training Report
-Final MAE: {mae:.2E}
+absolute error: {forecast_mae:.2E}
+Coefficient error: {coeff_mae:.2E}
 Final loss: {final_loss:.2E}
 Best loss: {best_loss:.2E}
 Best epoch: {best_epoch}

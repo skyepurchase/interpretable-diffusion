@@ -4,6 +4,7 @@ from jaxtyping import PRNGKeyArray
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from models.paid import PAID
 from visualisers.ddim import generate_images
 
 
@@ -14,12 +15,14 @@ def evaluate(
     *,
     key: PRNGKeyArray,
 ):
+    assert isinstance(model, PAID), f"{type(model)} is not supported."
     model.eval()
 
-    mae = jnp.zeros((0, 50, 12))
+    forecast_mae = jnp.zeros((0, 50, 12))
+    coeff_mae = jnp.zeros((0, 1))
     pbar = tqdm(testloader, desc="Evaluating") if local else testloader
-    for batch, _ in pbar:
-        preds = generate_images(
+    for batch, coeffs in pbar:
+        forecast = generate_images(
             model,
             batch,
             condition=model.condition,
@@ -27,9 +30,11 @@ def evaluate(
             estimation_type="mean",
             jump=10,
             key=key,
-        )[:, :, :, 0]
+        ).reshape(batch.shape)
 
-        mean_abs_error = jnp.absolute(preds - batch)
-        mae = jnp.concatenate([mae, mean_abs_error])
+        _, _, preds, _ = model.denoiser._embed(forecast, jnp.zeros((batch.shape[0], 1)))
 
-    return mae.mean()
+        forecast_mae = jnp.concatenate([forecast_mae, jnp.absolute(forecast - batch)])
+        coeff_mae = jnp.concatenate([coeff_mae, jnp.absolute(preds[0] - coeffs)])
+
+    return forecast_mae.mean(), coeff_mae.mean()

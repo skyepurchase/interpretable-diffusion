@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import jax.random
 from flax import nnx
 from jax.random import split
+from jaxtyping import Array
 
 from models.paid import PAID
 from models.phys_vae import gen_mask
@@ -11,11 +12,11 @@ from models.utils import remove_padding
 
 def augmentation_loss(
     model: PAID,
-    phys_params: list[jax.Array],
-    y_init: jax.Array,
-    tau: jax.Array,
-    key: jax.Array,
-) -> jax.Array:
+    phys_params: list[Array],
+    y_init: Array,
+    tau: Array,
+    key: Array,
+) -> Array:
     """
     TODO: write docstring
 
@@ -27,12 +28,12 @@ def augmentation_loss(
         Estimated physics parameters
     tau : Array (B)
         Diffusion timestep
-    y_init : jax.Array (B, X)
+    y_init : Array (B, X)
         The initial condition
 
     Returns
     -------
-    loss : jax.Array ()
+    loss : Array ()
         The data augmentation loss
     """
     model.eval()
@@ -69,7 +70,7 @@ def augmentation_loss(
     return aug_loss
 
 
-def discrepancy_loss(x_hats: jax.Array) -> jax.Array:
+def discrepancy_loss(x_hats: Array) -> Array:
     """
     TODO: create docstring
 
@@ -103,9 +104,7 @@ def discrepancy_loss(x_hats: jax.Array) -> jax.Array:
     return masked_disc.sum() / mask.sum()
 
 
-def loss_fn(
-    model: PAID, data: jax.Array, key: jax.Array
-) -> tuple[jax.Array, jax.Array]:
+def loss_fn(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
     """
     Container function for the separate losses that define the physics aligned interpretable diffusion training.
 
@@ -184,8 +183,8 @@ def loss_fn(
 
 @nnx.jit
 def train_step(
-    model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
-) -> jax.Array:
+    model: nnx.Module, data: Array, optimizer: nnx.Optimizer, key: Array
+) -> Array:
     """
     Carry out a single train step; randomly sample noise and time steps, calculate the model loss, perform gradient descent.
 
