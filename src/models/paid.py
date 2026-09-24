@@ -499,7 +499,7 @@ class PhysUNet2D(nnx.Module):
         # x_hat : (1, B, T, X, 1)
         x_hat = self._generate(x, x_hat, aux_latents, phys_latents)
 
-        assert len(x_hat.shape) == 5, (
+        assert len(x_hat.shape) == self.dimension + 3, (
             "Internal issue with generation should return combination solution."
         )
         assert x_hat.shape[0] == 1, (

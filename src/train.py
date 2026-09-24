@@ -161,6 +161,10 @@ def train(
         final_loss = running_loss["loss"]
     end = time.perf_counter()
 
+    print("\nSaving model...")
+    save_model(model, config["checkpoint_dir"], stamp)
+    print("Saved.")
+
     key, eval_key = split(key, num=2)
     forecast_mae, coeff_mae = evaluate(model, val_loader, local=local, key=eval_key)
 
@@ -205,8 +209,9 @@ if __name__ == "__main__":
     key = jax.random.key(args.seed)
     rngs = nnx.Rngs(args.seed)
 
+    data_key, key = jax.random.split(key)
     train_loader, val_loader, _ = DATASETS[config["dataset"]](
-        **config["dataset_config"], key=key
+        **config["dataset_config"], key=data_key
     )
 
     config_string = yaml.dump(config["dataset_config"], indent=4, sort_keys=False)
@@ -259,5 +264,3 @@ if __name__ == "__main__":
         pretrain=False,
         key=subkey,
     )
-
-    save_model(model, config["checkpoint_dir"], stamp)

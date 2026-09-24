@@ -3,6 +3,7 @@ from typing import Callable
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import torch
 from diffrax import Euler, ODETerm, SaveAt, diffeqsolve
 from diffrax._custom_types import RealScalarLike
@@ -24,11 +25,11 @@ class PiVAEDataset(Dataset):
         time_forward = jnp.permute_dims(series, (0, 2, 1))
 
         if retain_dim:
-            self.data = torch.tensor(time_forward)
+            self.data = torch.from_numpy(np.array(time_forward))
         else:
-            self.data = torch.tensor(time_forward).flatten(start_dim=1)
+            self.data = torch.from_numpy(np.array(time_forward)).flatten(start_dim=1)
 
-        self.coefficients = torch.tensor(coefficients)
+        self.coefficients = torch.from_numpy(np.array(coefficients))
 
     def __len__(self) -> int:
         return len(self.data)

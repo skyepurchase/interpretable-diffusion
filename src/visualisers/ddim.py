@@ -138,7 +138,7 @@ def make_ddim_step(
         alpha_tm1 = alphas[t_next].reshape(shape)
 
         pred = model(
-            jnp.pad(x_t, ((0, 0), model.pad[0], model.pad[1], (0, 0))),
+            jnp.pad(x_t, ((0, 0), *model.pad, (0, 0))),
             t,
         )
         pred = remove_padding(pred, model.pad)
@@ -200,8 +200,9 @@ def generate_images(
 
     model.eval()
 
-    if len(input.shape) < 4:
-        input = jnp.expand_dims(input, axis=3)
+    if len(input.shape) < model.dimension + 2:
+        input = jnp.expand_dims(input, axis=-1)
+
     n_samples = input.shape[0]
 
     alphas = (1 - model.betas).cumprod(axis=0)

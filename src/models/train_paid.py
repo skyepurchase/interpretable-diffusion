@@ -211,10 +211,6 @@ def train_step(
 
     if len(data.shape) < model.dimension + 2:
         data = jnp.expand_dims(data, -1)
-    elif len(data.shape) < 3:
-        raise ValueError(
-            f"Data array incorrect shape. Expected 3 or 4 dimensions received {len(data.shape)}"
-        )
 
     (_, losses), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, data, key)
     optimizer.update(model, grads)

@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from models.paid import PAID
+from utils import load_config
 from visualisers.ddim import generate_images
 
 
@@ -18,7 +19,7 @@ def evaluate(
     assert isinstance(model, PAID), f"{type(model)} is not supported."
     model.eval()
 
-    forecast_mae = jnp.zeros((0, 50, 12))
+    forecast_mae = jnp.zeros((0, model.time_dim, model.num_grid_points))
     coeff_mae = jnp.zeros((0, 1))
     pbar = tqdm(testloader, desc="Evaluating") if local else testloader
     for batch, coeffs in pbar:
@@ -32,9 +33,53 @@ def evaluate(
             key=key,
         ).reshape(batch.shape)
 
-        _, _, preds, _ = model.denoiser._embed(forecast, jnp.zeros((batch.shape[0], 1)))
+        _, _, preds, _ = model.denoiser._embed(
+            jnp.pad(forecast, [(0, 0), *model.pad, (0, 0)]),
+            jnp.zeros((batch.shape[0], 1)),
+        )
 
         forecast_mae = jnp.concatenate([forecast_mae, jnp.absolute(forecast - batch)])
         coeff_mae = jnp.concatenate([coeff_mae, jnp.absolute(preds[0] - coeffs)])
 
-    return forecast_mae.mean(), coeff_mae.mean()
+    return forecast_mae.mean().item(), coeff_mae.mean().item()
+
+
+if __name__ == "__main__":
+    import os
+    from argparse import ArgumentParser
+
+    import jax
+
+    from datasets import DATASETS
+    from models import load_model
+
+    parser = ArgumentParser()
+    parser.add_argument("-c", "--config", help="path to config file", required=True)
+    parser.add_argument(
+        "--checkpoint", help="checkpoint file in YYMMDD_HHMMSS format", default="latest"
+    )
+    parser.add_argument(
+        "-s", "--seed", type=int, help="the seed for the run", default=0
+    )
+    parser.add_argument("--local", action="store_true")
+
+    args = parser.parse_args()
+    config = load_config(args.config)
+
+    key = jax.random.key(args.seed)
+    rngs = nnx.Rngs(args.seed)
+
+    model = load_model(
+        config["model"],
+        config["model_config"],
+        os.path.join(os.getcwd(), config["checkpoint_dir"], args.checkpoint),
+        rngs=rngs,
+    )
+
+    data_key, key = jax.random.split(key)
+    _, test_loader, _ = DATASETS[config["dataset"]](
+        **config["dataset_config"], key=data_key
+    )
+
+    print()
+    print(evaluate(model, test_loader, args.local, key=key))
