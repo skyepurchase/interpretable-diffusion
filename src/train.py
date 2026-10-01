@@ -73,17 +73,16 @@ def train(
     local : bool = False
         Whether the program should output information
     """
-    if local:
-        trackio.init(
-            project="Interpretable Diffusion",
-            name=run,
-            config={
-                "epochs": epochs,
-                "learning_rate": learning_rate,
-                # TODO: pass batch_size here
-                "batch_size": next(iter(train_loader))[0].shape[0],
-            },
-        )
+    trackio.init(
+        project="Interpretable Diffusion",
+        name=run,
+        config={
+            "epochs": epochs,
+            "learning_rate": learning_rate,
+            # TODO: pass batch_size here
+            "batch_size": next(iter(train_loader))[0].shape[0],
+        },
+    )
 
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate, eps=eps), wrt=nnx.Param)
 
@@ -112,14 +111,13 @@ def train(
 
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 
-            if local:
-                if not loss_labels:
-                    loss_labels = ["loss"] + [
-                        f"sub_loss_{i + 1}" for i in range(len(losses) - 1)
-                    ]
+            if not loss_labels:
+                loss_labels = ["loss"] + [
+                    f"sub_loss_{i + 1}" for i in range(len(losses) - 1)
+                ]
 
-                for loss_label, loss in zip(loss_labels, losses):
-                    running_loss[loss_label] += loss.item() / len(train_loader)
+            for loss_label, loss in zip(loss_labels, losses):
+                running_loss[loss_label] += loss.item() / len(train_loader)
 
         model.eval()
         val_pbar = (
@@ -135,22 +133,16 @@ def train(
 
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 
-            if local:
-                running_loss["val_loss"] += losses[0].item() / len(val_loader)
+            running_loss["val_loss"] += losses[0].item() / len(val_loader)
 
         model.train()
 
-        if local:
-            trackio.log(running_loss)
+        trackio.log(running_loss)
 
         curr_loss = running_loss["loss"]
         if best_loss >= curr_loss:
             best_loss = curr_loss
             best_epoch = epoch
-        elif not local:
-            print(
-                f"Loss surpassed best loss: {curr_loss:.2E}. Best loss: {best_loss:.2E}."
-            )
 
         if local:
             assert isinstance(pbar, tqdm)  # For type hints
@@ -161,35 +153,31 @@ def train(
         final_loss = running_loss["loss"]
     end = time.perf_counter()
 
-    print("\nSaving model...")
-    save_model(model, config["checkpoint_dir"], stamp)
-    print("Saved.")
-
     key, eval_key = split(key, num=2)
     forecast_mae, coeff_mae = evaluate(model, val_loader, local=local, key=eval_key)
 
-    if local:
-        report = f"""# Training report
-    - Mean absolute error: {forecast_mae:.2E}
-    - Coefficient error: {coeff_mae:.2E}
-    - Final loss: {final_loss:.2E}
-    - Train time: {format_time(end - start)}
+    report = f"""# Training report
+- Mean absolute error: {forecast_mae:.2E}
+- Coefficient error: {coeff_mae:.2E}
+- Final loss: {final_loss:.2E}
+- Train time: {format_time(end - start)}
 
-    ## Model config
-    ```yaml
-    {config_string}
-    ```
-        """
-        trackio.log({"training_report": trackio.Markdown(report)})
+## Model config
+```yaml
+{config_string}
+```
+    """
+    trackio.log({"training_report": trackio.Markdown(report)})
 
-        trackio.finish()
-    else:
+    trackio.finish()
+
+    if not local:
         print(
             f"""
 # Training Report
-absolute error: {forecast_mae:.2E}
-Coefficient error: {coeff_mae:.2E}
-Final loss: {final_loss:.2E}
+absolute error: {forecast_mae}
+Coefficient error: {coeff_mae}
+Final loss: {final_loss}
 Best loss: {best_loss:.2E}
 Best epoch: {best_epoch}
 Train time: {format_time(end - start)}
@@ -214,7 +202,7 @@ if __name__ == "__main__":
         **config["dataset_config"], key=data_key
     )
 
-    config_string = yaml.dump(config["dataset_config"], indent=4, sort_keys=False)
+    config_string = yaml.dump(config, indent=4, sort_keys=False)
 
     model = MODELS[config["model"]](**config["model_config"], rngs=rngs)
 
@@ -264,3 +252,7 @@ if __name__ == "__main__":
         pretrain=False,
         key=subkey,
     )
+
+    print("\nSaving model...")
+    save_model(model, config["checkpoint_dir"], stamp)
+    print("Saved.")

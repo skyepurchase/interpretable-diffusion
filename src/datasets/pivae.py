@@ -99,14 +99,20 @@ def generate_pendulum_data(
 
     init_key, omega_key, xi_key, phi_key, amp_key, key = jax.random.split(key, num=6)
 
-    y = jax.random.uniform(
-        init_key, (n_samples, 2), minval=-jnp.pi / 2, maxval=jnp.pi / 2
+    y = jnp.concatenate(
+        [
+            jax.random.uniform(
+                init_key, (n_samples, 1), minval=-jnp.pi / 2, maxval=jnp.pi / 2
+            ),
+            jnp.zeros((n_samples, 1)),
+        ],
+        axis=-1,
     )
 
     omega = jax.random.uniform(
         omega_key, (n_samples, 1), minval=jnp.pi / 4, maxval=jnp.pi
     )
-    xi = jax.random.uniform(xi_key, (n_samples, 1), minval=0, maxval=8)
+    xi = jax.random.uniform(xi_key, (n_samples, 1), minval=0, maxval=0.8)
     phi = jax.random.uniform(phi_key, (n_samples, 1), minval=jnp.pi, maxval=2 * jnp.pi)
     A = jax.random.uniform(amp_key, (n_samples, 1), minval=0, maxval=40)
 

@@ -27,9 +27,11 @@ def pendulum_model(_t: RealScalarLike, y: jax.Array, a_list: jax.Array) -> jax.A
         The output dynamics, dy and ddy
     """
     omega = a_list[0]
-    return jnp.concatenate(
-        [y[:, 1].reshape(-1, 1), -(omega**2) * jnp.sin(y[:, 0].reshape(-1, 1))], axis=1
-    )
+
+    theta, theta_dot = jnp.split(y, 2, axis=-1)
+    dtheta_dot = -(omega**2 * jnp.sin(theta))
+
+    return jnp.concatenate([theta_dot, dtheta_dot], axis=1)
 
 
 def make_diffusion_model(ds: jax.Array, boundary: str | float = 0.0) -> Operator:

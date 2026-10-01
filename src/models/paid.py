@@ -1,3 +1,4 @@
+import copy
 from functools import reduce
 from typing import Callable, Optional
 
@@ -69,10 +70,11 @@ class PhysUNet2D(nnx.Module):
 
         # Modules
         # temporal Unet
-        unet_config["activation"] = ACTS[
+        config_clone = copy.deepcopy(unet_config)
+        config_clone["activation"] = ACTS[
             unet_config["activation"]
         ]  # Convert to function
-        self.unet = CondUNet(**unet_config, dimension=self.dimension, rngs=rngs)
+        self.unet = CondUNet(**config_clone, dimension=self.dimension, rngs=rngs)
         unet_latent_features = unet_config["ch_mult"][-1] * unet_config["ch"]
 
         # Auxiliary functions
@@ -167,8 +169,8 @@ class PhysUNet2D(nnx.Module):
                 lambda x: x.reshape(x.shape[0], -1),
                 nnx.Linear(flat_dim, phys_cfg["latent_dim"], rngs=rngs),
                 nnx.sigmoid,
-                lambda x: x
-                * ((2 * param_range[1]) - (param_range[0] / 2) + (param_range[0] / 2)),
+                lambda x: x * ((2 * param_range[1]) - (param_range[0] / 2))
+                + (param_range[0] / 2),
             )
             self.phys_funcs.append(phys_func)
 
@@ -288,7 +290,8 @@ class PhysUNet2D(nnx.Module):
         # phys_latent : (B, Z)
         phys_params = []
         for phys_func in self.phys_funcs:
-            phys_params.append(phys_func(phys_h))
+            param = phys_func(phys_h)
+            phys_params.append(param)
 
         for block in self.unet.blocks_up:
             h = jnp.concatenate([h, hs.pop()], axis=-1)

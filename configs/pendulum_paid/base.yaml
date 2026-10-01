@@ -24,7 +24,7 @@ model_config:
     time_dim: 50
     integral_level: 1.0
     timestep: 0.05
-    spatial_length: 2.0
+    spatial_length: -1.0
     num_grid_points: 1
     solver: euler
 
