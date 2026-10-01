@@ -7,14 +7,12 @@ from jaxtyping import Array
 
 from models.paid import PAID
 from models.phys_vae import gen_mask
-from models.utils import remove_padding
 
 
 def augmentation_loss(
     model: PAID,
     phys_params: list[Array],
     y_init: Array,
-    tau: Array,
     key: Array,
 ) -> Array:
     """
@@ -48,24 +46,16 @@ def augmentation_loss(
         )
         aug_params.append(aug_param)
 
+    # (B, X*T)
     aug_phys_hat = jax.lax.stop_gradient(
         model.generate_physics(aug_params, jax.lax.stop_gradient(y_init))
     )
 
     model.train()
 
-    t_emb = model.denoiser.unet.time_proj(tau)
-    t_emb = model.denoiser.unet.time_embedding(t_emb)
-
     aug_loss = jnp.zeros(())
     for phys_func, aug_param in zip(model.denoiser.phys_funcs, aug_params):
-        phys_features = jnp.pad(aug_phys_hat, [(0, 0), *model.pad, (0, 0)])
-        for block in model.denoiser.unet.blocks_down:
-            phys_features = block(phys_features, t_emb)
-
-        phys_features = model.denoiser.unet.block_mid(phys_features, t_emb)
-
-        aug_loss += jnp.square(phys_func(phys_features) - aug_param).sum(axis=1).mean()
+        aug_loss += jnp.square(phys_func(aug_phys_hat) - aug_param).sum(axis=1).mean()
 
     return aug_loss
 
@@ -139,12 +129,8 @@ def loss_fn(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
         [data[:, : model.condition], noisy_x[:, model.condition :]], axis=1
     )
 
-    x_hat, phys_pred, phys_params = model.denoiser.full_forward(
-        jnp.pad(x, [(0, 0), *model.pad, (0, 0)]), tau
-    )
-
-    phys_pred = remove_padding(phys_pred, model.pad)
-    x_hat = remove_padding(x_hat, [(0, 0)] + model.pad)
+    # (m, B, T, X, 1), (B, T, X, 1), (B, Z)
+    x_hat, phys_pred, phys_params = model.denoiser.full_forward(x, tau)
     phys_gen = x_hat[0]
 
     reconstruction_loss = (
@@ -170,7 +156,6 @@ def loss_fn(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
         model,
         phys_params,
         data[:, 0].reshape(-1, model.num_grid_points),
-        tau,
         key=aug_key,
     )
 
@@ -209,7 +194,7 @@ def train_step(
     if not isinstance(model, PAID):
         raise TypeError(f"Expected model type to be PAID not {type(model)}")
 
-    if len(data.shape) < model.dimension + 2:
+    if len(data.shape) < 4:
         data = jnp.expand_dims(data, -1)
 
     (_, losses), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, data, key)

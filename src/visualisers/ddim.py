@@ -6,7 +6,6 @@ from flax import nnx
 
 from models.ddim import DDIM
 from models.paid import PAID
-from models.utils import remove_padding
 
 Carry = tuple[jax.Array, jax.Array]
 
@@ -60,11 +59,7 @@ def make_ddpm_step(
         alpha_t = alphas[t].reshape(shape)
         alpha_tm1 = alphas[t - 1].reshape(shape)
 
-        pred = model(
-            jnp.pad(x_t, ((0, 0), *model.pad, (0, 0))),
-            t,
-        )
-        pred = remove_padding(pred, model.pad)
+        pred = model(x_t, t)
 
         if estimation_type == "variance":
             x_0 = (x_t - pred * jnp.sqrt(1 - alpha_t)) / jnp.sqrt(alpha_t)
@@ -91,7 +86,7 @@ def make_ddpm_step(
 def make_ddim_step(
     num_samples: int,
     alphas: jax.Array,
-    model: DDIM | PAID,
+    model: PAID,
     condition: int = 5,
     estimation_type: str = "variance",
 ) -> Callable[[Carry, jax.Array], tuple[Carry, jax.Array]]:
@@ -137,11 +132,10 @@ def make_ddim_step(
         alpha_t = alphas[t].reshape(shape)
         alpha_tm1 = alphas[t_next].reshape(shape)
 
-        pred = model(
-            jnp.pad(x_t, ((0, 0), *model.pad, (0, 0))),
-            t,
-        )
-        pred = remove_padding(pred, model.pad)
+        x_hat, _, phys_params = model.denoiser.full_forward(x_t, t)
+        pred = x_hat[-1]
+        # (B, 1)
+        coeff = phys_params[0]
 
         if estimation_type == "variance":
             eps = pred
@@ -150,6 +144,7 @@ def make_ddim_step(
             x_0 = pred
             eps = (x_t - x_0 * jnp.sqrt(alpha_t)) / jnp.sqrt(1 - alpha_t)
 
+        # x_tm1 : (B, T, X, 1)
         x_tm1 = jax.lax.cond(
             tau_next == 0,
             lambda: x_0,
@@ -159,7 +154,19 @@ def make_ddim_step(
         # Assumes that x_T[:, :condition] is not random noise to begin with
         x_tm1 = jnp.concatenate([x_t[:, :condition], x_tm1[:, condition:]], axis=1)
 
-        return (x_tm1, tau_next), x_tm1
+        # out : (B, T, X, 2)
+        out = jnp.concatenate(
+            [
+                x_tm1,
+                jnp.tile(
+                    jnp.reshape(coeff, (-1, 1, 1, 1)),
+                    reps=(1, x_tm1.shape[1], x_tm1.shape[2], 1),
+                ),
+            ],
+            axis=-1,
+        )
+
+        return (x_tm1, tau_next), out
 
     return step
 
@@ -200,7 +207,7 @@ def generate_images(
 
     model.eval()
 
-    assert len(input.shape) == model.dimension + 2
+    assert len(input.shape) == 4
 
     n_samples = input.shape[0]
 
@@ -249,7 +256,7 @@ def generate_images(
 
     _, images = jax.lax.scan(gen_step, init, steps)
 
-    return images[-1]
+    return images[:, :, 0, 0, 1]
 
 
 def generate_mnist(
@@ -284,6 +291,6 @@ def generate_timeseries(
         estimation_type=est_type,
         jump=jump,
         key=key,
-    )
+    )[:, :, :, :1]
 
     return jnp.permute_dims(generated, (0, 2, 1, 3))

@@ -1,4 +1,3 @@
-import copy
 from functools import reduce
 from typing import Callable, Optional
 
@@ -9,14 +8,24 @@ from diffrax._custom_types import RealScalarLike
 from flax import nnx
 from jaxtyping import PyTree
 
-from diffuse.neural_network.blocks import ResnetBlock
-from diffuse.neural_network.nn import CondUNet
 from models.ddim import compute_betas
 from models.mlp import make_mlp
 from models.modules.acts import ACTS
 from models.phys_vae import gen_selections
 from models.physics_models import Operator, get_physics_model, get_solver
-from models.utils import remove_padding
+
+
+class SinusoidalEmbedding:
+    def __init__(self, dim):
+        self.dim = dim
+
+    def __call__(self, t):
+        half_dim = self.dim // 2
+        emb = jnp.log(10000.0) / (half_dim - 1)
+        emb = jnp.exp(jnp.arange(half_dim) * -emb)
+        emb = (1000 * t[:, None]) * emb[None, :]
+        emb = jnp.concatenate([jnp.sin(emb), jnp.cos(emb)], axis=1)
+        return emb
 
 
 class PhysUNet2D(nnx.Module):
@@ -24,14 +33,12 @@ class PhysUNet2D(nnx.Module):
 
     def __init__(
         self,
-        unet_config: dict,
-        pde_config: dict,
         aux_funcs: list[dict],
         unmixer: dict,
         phys_funcs: list[dict],
         pre_funcs: list[dict],
         post_funcs: list[dict],
-        integral_level: int,
+        phys_param_ranges: list[tuple[float, float]],
         t_span: jax.Array,
         t1: float,
         dt: float,
@@ -40,12 +47,9 @@ class PhysUNet2D(nnx.Module):
         time_dim: int,
         physics_model: Operator,
         solver: Callable[[], AbstractSolver],
-        pad: list[tuple[int, int]],
         rngs: nnx.Rngs,
     ):
         # Constants
-        self.pad = pad
-
         num_pre_funcs = len(pre_funcs)
         num_post_funcs = len(post_funcs)
         self.pre_combs = 2**num_pre_funcs
@@ -55,122 +59,71 @@ class PhysUNet2D(nnx.Module):
         )
 
         ## PDE solver constants
-        self.integral_level = integral_level
         self.t_span = t_span
         self.t1 = t1
         self.dt = dt
         self.num_grid_points = num_grid_points
         self.pde_dim = pde_dim
         self.time_dim = time_dim
-
-        self.dimension = 2 if self.num_grid_points > 1 else 1
+        self.data_dim = num_grid_points * time_dim
+        self.embed_dim = self.data_dim  # Fiddle
 
         self.physics_model = physics_model
         self.solver = solver
 
         # Modules
-        # temporal Unet
-        config_clone = copy.deepcopy(unet_config)
-        config_clone["activation"] = ACTS[
-            unet_config["activation"]
-        ]  # Convert to function
-        self.unet = CondUNet(**config_clone, dimension=self.dimension, rngs=rngs)
-        unet_latent_features = unet_config["ch_mult"][-1] * unet_config["ch"]
+        # Diffusion step embedding
+        self.time_proj = SinusoidalEmbedding(dim=self.embed_dim)
+        self.time_embed = nnx.Sequential(
+            nnx.Linear(self.embed_dim, self.embed_dim * 4, rngs=rngs),
+            ACTS["swish"],
+            nnx.Linear(self.embed_dim * 4, self.embed_dim, rngs=rngs),
+        )
 
         # Auxiliary functions
         aux_dims = []
-        halving = 2 ** (len(unet_config["ch_mult"]) - 1)
-
-        if self.dimension == 2:
-            flat_dim_base = ((self.num_grid_points + sum(self.pad[1])) // halving) * (
-                (self.time_dim + sum(self.pad[0])) // halving
-            )
-        elif self.dimension == 1:
-            flat_dim_base = (self.time_dim + sum(self.pad[0])) // halving
-        else:
-            raise NotImplementedError(
-                f"Dimension of {self.dimension} is not supported."
-            )
-
         self.aux_funcs = nnx.List()
         for aux_cfg in aux_funcs:
-            flat_dim = flat_dim_base * aux_cfg["features"]
-            aux_func = nnx.Sequential(
-                ResnetBlock(
-                    in_channels=unet_latent_features,
-                    out_channels=aux_cfg["features"],
-                    activation=ACTS[aux_cfg["act"]],
-                    embedding_dim=aux_cfg.get("time_dim"),
-                    dropout=aux_cfg["dropout"],
-                    dropout_rate=aux_cfg["dropout_rate"],
-                    dimension=self.dimension,
-                    rngs=rngs,
-                ),
-                ACTS[aux_cfg["act"]],
-                lambda x: x.reshape(x.shape[0], -1),
-                nnx.Linear(flat_dim, aux_cfg["latent_dim"], rngs=rngs),
+            # X*T + E -> Z
+            aux_func = make_mlp(
+                self.data_dim + self.embed_dim,
+                aux_cfg["dims"],
+                aux_cfg["latent_dim"],
+                aux_cfg["act"],
+                rngs=rngs,
             )
             self.aux_funcs.append(aux_func)
             aux_dims.append(aux_cfg["latent_dim"])
 
-        # Known physics signal estimators
+        # Denoiser to known operator solutions
         latent_dims = reduce(lambda x, y: x + y, aux_dims)
-        self.unmixer_conv = nnx.Conv(
-            in_features=latent_dims + 1,
-            out_features=unmixer["dims"][0],
-            kernel_size=(3,) * self.dimension,
-            strides=(1,) * self.dimension,
-            padding=(1,) * self.dimension,
-            rngs=rngs,
-        )
-        self.unmixer = nnx.List([])
-        for in_features, out_features in zip(unmixer["dims"][:-1], unmixer["dims"][1:]):
-            self.unmixer.append(
-                ResnetBlock(
-                    in_channels=in_features,
-                    out_channels=out_features,
-                    activation=ACTS[unmixer["act"]],
-                    embedding_dim=unmixer.get("time_dim"),
-                    dropout=unmixer["dropout"],
-                    dropout_rate=unmixer["dropout_rate"],
-                    dimension=self.dimension,
-                    rngs=rngs,
-                )
-            )
-            in_features = out_features
-        self.unmixer_out = nnx.Conv(
-            in_features=unmixer["dims"][-1],
-            out_features=1,
-            kernel_size=(3,) * self.dimension,
-            strides=(1,) * self.dimension,
-            padding=(1,) * self.dimension,
+        # Z + X*T + E -> X*T
+        self.unmixer = make_mlp(
+            latent_dims + self.data_dim + self.embed_dim,
+            unmixer["dims"],
+            self.data_dim,
+            unmixer["act"],
             rngs=rngs,
         )
 
         # Physic parameter functions
-        assert len(phys_funcs) == len(pde_config["phys_param_ranges"]), (
-            f"Number of physics model parameters must match number of parameter estimators, {len(pde_config['phys_param_ranges'])} != {len(phys_funcs)}"
+        assert len(phys_funcs) == len(phys_param_ranges), (
+            f"Number of physics model parameters must match number of parameter estimators, {len(phys_param_ranges)} != {len(phys_funcs)}"
         )
         self.phys_funcs = nnx.List()
-        for phys_cfg, param_range in zip(phys_funcs, pde_config["phys_param_ranges"]):
-            flat_dim = flat_dim_base * phys_cfg["features"]
+        for phys_cfg, param_range in zip(phys_funcs, phys_param_ranges):
+            min, max = param_range
+            # X*T -> Z
             phys_func = nnx.Sequential(
-                ResnetBlock(
-                    in_channels=unet_latent_features,
-                    out_channels=phys_cfg["features"],
-                    activation=ACTS[phys_cfg["act"]],
-                    embedding_dim=phys_cfg.get("time_dim"),
-                    dropout=phys_cfg["dropout"],
-                    dropout_rate=phys_cfg["dropout_rate"],
-                    dimension=self.dimension,
+                make_mlp(
+                    self.data_dim,
+                    phys_cfg["dims"],
+                    phys_cfg["latent_dim"],
+                    phys_cfg["act"],
                     rngs=rngs,
                 ),
-                ACTS[phys_cfg["act"]],
-                lambda x: x.reshape(x.shape[0], -1),
-                nnx.Linear(flat_dim, phys_cfg["latent_dim"], rngs=rngs),
                 nnx.sigmoid,
-                lambda x: x * ((2 * param_range[1]) - (param_range[0] / 2))
-                + (param_range[0] / 2),
+                lambda x: x * ((2 * max) - (min / 2)) + (min / 2),
             )
             self.phys_funcs.append(phys_func)
 
@@ -189,36 +142,21 @@ class PhysUNet2D(nnx.Module):
             self.pre_funcs.append(func)
 
         ## Post PDE perturbations
-        self.post_funcs = nnx.List()
+        self.post_funcs = nnx.List([])
         for func_cfg in post_funcs:
-            func = nnx.Sequential(
-                nnx.Conv(
-                    in_features=2 + func_cfg["latent_dim"],
-                    out_features=func_cfg["features"],
-                    kernel_size=(3,) * self.dimension,
-                    strides=(1,) * self.dimension,
-                    padding=(1,) * self.dimension,
-                    rngs=rngs,
-                ),
-                nnx.GroupNorm(
-                    num_features=func_cfg["features"],
-                    num_groups=8,
-                    rngs=rngs,
-                ),
-                nnx.Conv(
-                    in_features=func_cfg["features"],
-                    out_features=1,
-                    kernel_size=(3,) * self.dimension,
-                    strides=(1,) * self.dimension,
-                    padding=(1,) * self.dimension,
-                    rngs=rngs,
-                ),
+            # Z + X*T -> X*(T-1)
+            func = make_mlp(
+                func_cfg["latent_dim"] + self.data_dim,
+                func_cfg["dims"],
+                self.data_dim,
+                func_cfg["act"],
+                rngs=rngs,
             )
             self.post_funcs.append(func)
 
     def _embed(
         self, x: jax.Array, tau: jax.Array
-    ) -> tuple[jax.Array, list[jax.Array], list[jax.Array], jax.Array]:
+    ) -> tuple[list[jax.Array], list[jax.Array], jax.Array]:
         """
         Compute physics signal, latents, and reconstruction primer all of which is the same regardless of training or inference.
 
@@ -231,81 +169,40 @@ class PhysUNet2D(nnx.Module):
 
         Returns
         -------
-        h : (B, T, X, 1)
-            UNet augmented input
         aux_latents : list[(B, Z)]
             List of auxiliary latents
         phys_params : list[(B, Z)]
             List of physic parameters
-        phys_sig : (B, T, X, 1)
+        phys_sig : (B, X*T)
             Estimated known physics signal
         """
         # x : (B, T, X, 1)
-        h = x
+        h = x.reshape(-1, self.data_dim)
 
-        t_emb = self.unet.time_proj(tau)
-        t_emb = self.unet.time_embedding(t_emb)
-
-        hs = []
-        for block in self.unet.blocks_down:
-            h = block(h, t_emb)
-            hs.append(h)
-
-        h = self.unet.block_mid(h, t_emb)
+        t_emb = self.time_proj(tau)
+        t_emb = self.time_embed(t_emb)
 
         # aux_latent : (B, Z)
         aux_latents = []
         for aux_func in self.aux_funcs:
-            aux_latents.append(aux_func(h))
+            aux_latents.append(aux_func(jnp.concatenate([h, t_emb], axis=-1)))
 
         # full_aux : (B, Z1 + ... + Zn)
         full_aux = jnp.concatenate(aux_latents, axis=-1)
 
-        # phys_sig : (B, T, X, 1)
-        phys_sig = self.unmixer_conv(
-            jnp.concatenate(
-                [
-                    x,
-                    jnp.tile(
-                        jnp.expand_dims(
-                            full_aux, axis=list(range(1, self.dimension + 1))
-                        ),
-                        [1, *x.shape[1 : self.dimension + 1], 1],
-                    ),
-                ],
-                axis=-1,
-            )
-        )
-        for layer in self.unmixer:
-            phys_sig = layer(phys_sig, t_emb)
-
-        phys_sig = self.unmixer_out(phys_sig)
-        phys_h = phys_sig
-
-        for block in self.unet.blocks_down:
-            phys_h = block(phys_h, t_emb)
-
-        phys_h = self.unet.block_mid(phys_h, t_emb)
+        # phys_sig : (B, X*T)
+        phys_sig = self.unmixer(jnp.concatenate([h, full_aux, t_emb], axis=-1))
 
         # phys_latent : (B, Z)
         phys_params = []
         for phys_func in self.phys_funcs:
-            param = phys_func(phys_h)
-            phys_params.append(param)
+            phys_params.append(phys_func(phys_sig))
 
-        for block in self.unet.blocks_up:
-            h = jnp.concatenate([h, hs.pop()], axis=-1)
-            h = block(h, t_emb)
-
-        # h : (B, T, X, 1)
-        h = self.unet.out(h)
-
-        return h, aux_latents, phys_params, phys_sig
+        return aux_latents, phys_params, phys_sig
 
     def _generate(
         self,
         x: jax.Array,
-        x_hat: jax.Array,
         aux_latents: list[jax.Array],
         phys_params: list[jax.Array],
         pre_combs: int = 1,
@@ -318,10 +215,8 @@ class PhysUNet2D(nnx.Module):
 
         Parameters
         ----------
-        x : Array (B, W, H, C) padded
+        x : Array (B, T, X, 1) padded
             The input noisy sample
-        x_hat : Array (B, W, H, C) padded
-            Clean estimate without physics information
         aux_latents : Array (B, Z)
             The auxiliary latents
         phys_params : Array (B, Z)
@@ -337,7 +232,7 @@ class PhysUNet2D(nnx.Module):
 
         Returns
         -------
-        phys_x_hat : Array (m, B, W, H, C)
+        phys_x_hat : Array (m, B, X*T)
             The estimated clean sample incorporating physics knowledge
         """
 
@@ -403,7 +298,7 @@ class PhysUNet2D(nnx.Module):
         # init_cond : ^(B*n, X*D)
         init_cond = jnp.tile(
             jnp.pad(
-                remove_padding(x, self.pad)[:, 0].reshape(-1, self.num_grid_points),
+                x[:, 0].reshape(-1, self.num_grid_points),
                 ((0, 0), (0, self.pde_dim - self.num_grid_points)),
             ),
             reps=(pre_combs, 1),
@@ -422,43 +317,28 @@ class PhysUNet2D(nnx.Module):
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
 
-        # ^(n, B, T, X)
+        # ^(n, B, X*T)
         phys_x_hat = jnp.reshape(
             # ^(T, B*n, X*D) => ^(B*n, T, X)
             jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
-            (pre_combs, -1, self.time_dim, self.num_grid_points),
-        )
-        if self.dimension == 2:
-            # phys_x_hat : ^(n, B, T, X, 1)
-            phys_x_hat = jnp.expand_dims(phys_x_hat, axis=-1)
-
-        # phys_x_hat : (m, B, T, X, 1)
-        phys_x_hat = jnp.pad(
-            jnp.tile(phys_x_hat, [post_combs, *((1,) * (self.dimension + 2))]),
-            [(0, 0), (0, 0), *self.pad, (0, 0)],
+            (pre_combs, -1, self.data_dim),
         )
 
-        assert x_hat.shape == phys_x_hat.shape[1:], (
-            f"Both clean estimates should be the same shape, {x_hat.shape} != {phys_x_hat.shape[1:]}."
-        )
+        # phys_x_hat : (m, B, X*T)
+        phys_x_hat = jnp.tile(phys_x_hat, [post_combs, 1, 1])
 
         for z_aux, post_func, selections in zip(
             aux_latents[len(self.pre_funcs) : len(self.post_funcs)],
             self.post_funcs,
             post_selections,
         ):
-            # z_expanded : (B, T, X, Z)
-            z_expanded = jnp.tile(
-                jnp.expand_dims(z_aux, axis=list(range(1, self.dimension + 1))),
-                [1, *x.shape[1 : self.dimension + 1], 1],
-            )
-
+            # z_aux : (B, Z), phys : (B, X*T) -> (B, X*T)
             def apply_func(phys, apply):
                 return (1 - apply) * phys + apply * post_func(
-                    jnp.concatenate([x_hat, phys, z_expanded], axis=-1)
+                    jnp.concatenate([z_aux, phys], axis=-1)
                 )
 
-            # phys_x_hat : (m, B, T, X, 1)
+            # phys_x_hat : (m, B, X*T)
             phys_x_hat = jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
                 phys_x_hat, selections
             )
@@ -478,38 +358,22 @@ class PhysUNet2D(nnx.Module):
 
         Returns
         -------
-        x_hat : Array (B, W, H, C) padded
+        x_hat : Array (B, T, X, 1)
             Estimation of the clean x
         """
-        if self.dimension == 2:
-            assert x.shape[1:] == (
-                self.time_dim + sum(self.pad[0]),
-                self.num_grid_points + sum(self.pad[1]),
-                1,
-            ), (
-                f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, {self.num_grid_points + sum(self.pad[1])}, 1)"
-            )
-        elif self.dimension == 1:
-            assert x.shape[1:] == (
-                self.time_dim + sum(self.pad[0]),
-                1,
-            ), (
-                f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, 1)"
-            )
+        aux_latents, phys_latents, _ = self._embed(x, tau)
 
-        x_hat, aux_latents, phys_latents, _ = self._embed(x, tau)
+        # x_hat : (1, B, X*T)
+        x_hat = self._generate(x, aux_latents, phys_latents)
 
-        # x_hat : (1, B, T, X, 1)
-        x_hat = self._generate(x, x_hat, aux_latents, phys_latents)
-
-        assert len(x_hat.shape) == self.dimension + 3, (
+        assert len(x_hat.shape) == 3, (
             "Internal issue with generation should return combination solution."
         )
         assert x_hat.shape[0] == 1, (
             "Internal issue with generation should return single combination."
         )
 
-        return x_hat[0]
+        return jnp.reshape(x_hat[0], x.shape)
 
     def full_forward(
         self, x: jax.Array, tau: jax.Array
@@ -526,35 +390,18 @@ class PhysUNet2D(nnx.Module):
 
         Returns
         -------
-        x_hat : Array (m, B, W, H, C) padded
+        x_hat : Array (m, B, T, X, 1)
             Estimation of clean signal using combinations of auxiliary functions
-        phys_sig : Array (B, W, H, C) padded
+        phys_sig : Array (B, T, X, 1)
             Estimation of the known physics signal
         phys_params : list[Array (B, Z)]
             Estimation of physics parameters
         """
-        if self.dimension == 2:
-            assert x.shape[1:] == (
-                self.time_dim + sum(self.pad[0]),
-                self.num_grid_points + sum(self.pad[1]),
-                1,
-            ), (
-                f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, {self.num_grid_points + sum(self.pad[1])}, 1)"
-            )
-        elif self.dimension == 1:
-            assert x.shape[1:] == (
-                self.time_dim + sum(self.pad[0]),
-                1,
-            ), (
-                f"Unexpected shape for input, {x.shape} != ({x.shape[0]}, {self.time_dim + sum(self.pad[0])}, 1)"
-            )
+        aux_latents, phys_params, phys_sig = self._embed(x, tau)
 
-        # x_hat : (B, T, X, 1)
-        h, aux_latents, phys_params, phys_sig = self._embed(x, tau)
-
+        # x_hat : (m, B, X*T)
         x_hat = self._generate(
             x,
-            h,
             aux_latents,
             phys_params,
             self.pre_combs,
@@ -563,7 +410,7 @@ class PhysUNet2D(nnx.Module):
             self.post_selections,
         )
 
-        assert len(x_hat.shape) == self.dimension + 3, (
+        assert len(x_hat.shape) == 3, (
             "Internal issue with generation should return combination solution."
         )
         assert x_hat.shape[0] == self.pre_combs * self.post_combs, (
@@ -571,7 +418,11 @@ class PhysUNet2D(nnx.Module):
         )
 
         # x_hat: (m, B, T, X, 1), phys_sig : (B, T, X, 1), phys_params : (B, Z)
-        return x_hat, phys_sig, phys_params
+        return (
+            jnp.reshape(x_hat, (self.pre_combs * self.post_combs,) + x.shape),
+            jnp.reshape(phys_sig, x.shape),
+            phys_params,
+        )
 
 
 class PAID(nnx.Module):
@@ -581,7 +432,6 @@ class PAID(nnx.Module):
 
     def __init__(
         self,
-        unet: dict,
         pde: dict,
         aux_funcs: list[dict],
         unmixer: dict,
@@ -634,14 +484,12 @@ class PAID(nnx.Module):
 
         # Denoiser
         self.denoiser = PhysUNet2D(
-            unet,
-            pde,
             aux_funcs,
             unmixer,
             phys_funcs,
             pre_funcs,
             post_funcs,
-            self.integral_level,
+            pde["phys_param_ranges"],
             self.t_span,
             self.t1,
             self.dt,
@@ -650,7 +498,6 @@ class PAID(nnx.Module):
             self.time_dim,
             self.physics_model,
             self.solver,
-            pad,
             rngs,
         )
 
@@ -658,7 +505,6 @@ class PAID(nnx.Module):
         self.condition = condition
         self.phys_param_ranges = pde["phys_param_ranges"]
         self.pad = pad
-        self.dimension = self.denoiser.dimension
 
     def __call__(self, x: jax.Array, t: jax.Array) -> jax.Array:
         return self.denoiser.forward(x, t)
@@ -676,7 +522,7 @@ class PAID(nnx.Module):
 
         Returns
         -------
-        gen_phys : Array (B, W, H, C)
+        gen_phys : Array (B, X*T)
             Physics generated by the provided parameters
         """
         # init_cond : ^(B*n, X*D)
@@ -698,14 +544,11 @@ class PAID(nnx.Module):
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
 
-        # ^(B, T, X)
+        # ^(B, X*T)
         gen_phys = jnp.reshape(
-            # ^(T, B, X*D) => ^(B, T, X)
+            # ^(T, B, X*D) => ^(B, X*T)
             jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
-            (-1, self.time_dim, self.num_grid_points),
+            (-1, self.time_dim * self.num_grid_points),
         )
-        if self.dimension == 2:
-            # gen_phys : ^(B, T, X, 1)
-            gen_phys = jnp.expand_dims(gen_phys, axis=-1)
 
         return gen_phys

@@ -23,7 +23,7 @@ def evaluate(
     coeff_mae = jnp.zeros((0, 1))
     pbar = tqdm(testloader, desc="Evaluating") if local else testloader
     for batch, coeffs in pbar:
-        if len(batch.shape) < model.dimension + 2:
+        if len(batch.shape) < 4:
             batch = jnp.expand_dims(batch, axis=-1)
 
         forecast = generate_images(
@@ -34,20 +34,24 @@ def evaluate(
             estimation_type="mean",
             jump=10,
             key=key,
-        ).reshape(batch.shape)
-
-        _, _, preds, _ = model.denoiser._embed(
-            jnp.pad(forecast, [(0, 0), *model.pad, (0, 0)]),
-            jnp.zeros((batch.shape[0], 1)),
         )
+        coeffs = jnp.tile(jnp.reshape(coeffs, (1, 64)), reps=(100, 1))
+        coeff_mae = jnp.absolute(forecast - coeffs)
+        jax.debug.breakpoint()
+
+        assert forecast.shape[1:] == (*batch.shape[1:3], 2), (
+            f"Expected forecast to have shape (B, {batch.shape[1]}, {batch.shape[2]}, 2) received {forecast.shape}."
+        )
+        true_forecast = forecast[:, :, :, :1]
+        coeff_pred = forecast[:, 0, 0, 0].reshape(-1, 1)
 
         if forecast_mae is None:
-            forecast_mae = jnp.absolute(forecast - batch)
+            forecast_mae = jnp.absolute(true_forecast - batch)
         else:
             forecast_mae = jnp.concatenate(
-                [forecast_mae, jnp.absolute(forecast - batch)]
+                [forecast_mae, jnp.absolute(true_forecast - batch)]
             )
-        coeff_mae = jnp.concatenate([coeff_mae, jnp.absolute(preds[0] - coeffs)])
+        coeff_mae = jnp.concatenate([coeff_mae, jnp.absolute(coeff_pred - coeffs)])
 
     assert forecast_mae is not None  # typing
     return forecast_mae.mean().item(), coeff_mae.mean().item()
