@@ -220,7 +220,11 @@ def generate_diffusion_data(
     if sol is None:
         raise RuntimeError("ODE solution returned None")
 
-    return jnp.permute_dims(sol, (1, 2, 0)), b
+    noise_key, key = jax.random.split(key, 2)
+
+    return jnp.permute_dims(sol, (1, 2, 0)) + 1e-3 * jax.random.normal(
+        noise_key, (n_samples, x_grid, t_grid)
+    ), a
 
 
 def burgers_ODE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]:

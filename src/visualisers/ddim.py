@@ -254,9 +254,10 @@ def generate_images(
             f"Sampling method {sample_method} is not supported. Only 'ddim' and 'ddpm' are supported"
         )
 
+    # images (S, B, T, X, 2)
     _, images = jax.lax.scan(gen_step, init, steps)
 
-    return images[:, :, 0, 0, 1]
+    return images[-1]
 
 
 def generate_mnist(

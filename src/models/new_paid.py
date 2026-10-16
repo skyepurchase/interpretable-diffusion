@@ -4,7 +4,7 @@ from diffrax import Euler, ODETerm, SaveAt, diffeqsolve
 from flax import nnx
 from jaxtyping import Array
 
-from diffuse.neural_network.nn import CondUNet
+# from diffuse.neural_network.nn import CondUNet
 from models.mlp import Mlp
 from models.modules.acts import ACTS
 from models.physics_models import Operator, get_physics_model, get_solver
@@ -104,18 +104,18 @@ class FlowModel2D(FlowModel):
 
         self.act = ACTS[activation]
 
-        self.unet = CondUNet(
-            in_channels=in_channels,
-            ch=base_channel,
-            ch_mult=ch_mult,
-            num_res_blocks=1,
-            attention_resolutions=(),
-            activation=self.act,
-            dropout=dropout,
-            dropout_rate=dropout_rate,
-            num_heads=0,
-            rngs=rngs,
-        )
+        # self.unet = CondUNet(
+        #     in_channels=in_channels,
+        #     ch=base_channel,
+        #     ch_mult=ch_mult,
+        #     num_res_blocks=1,
+        #     attention_resolutions=(),
+        #     activation=self.act,
+        #     dropout=dropout,
+        #     dropout_rate=dropout_rate,
+        #     num_heads=0,
+        #     rngs=rngs,
+        # )
 
     def step(self, z_t: Array, t: Array) -> Array:
         """
@@ -137,7 +137,7 @@ class FlowModel2D(FlowModel):
             f"z_t and t must have the same batch, {z_t.shape[0]} != {t.shape[0]}."
         )
 
-        return self.unet(z_t, t).output
+        return z_t  # self.unet(z_t, t).output
 
 
 class FlowModel1D(FlowModel):

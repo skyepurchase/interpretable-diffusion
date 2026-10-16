@@ -123,7 +123,7 @@ class PhysUNet2D(nnx.Module):
                     rngs=rngs,
                 ),
                 nnx.sigmoid,
-                lambda x: x * ((2 * max) - (min / 2)) + (min / 2),
+                lambda x: x * ((5 * max) - (min / 5)) + (min / 5),
             )
             self.phys_funcs.append(phys_func)
 
@@ -133,7 +133,7 @@ class PhysUNet2D(nnx.Module):
         for func_cfg in pre_funcs:
             # Z + X*D + t -> dy
             func = make_mlp(
-                func_cfg["latent_dim"] + self.pde_dim + 1,
+                func_cfg["latent_dim"] + self.pde_dim + 2,
                 func_cfg["dims"],
                 self.num_grid_points,
                 func_cfg["act"],
@@ -279,10 +279,11 @@ class PhysUNet2D(nnx.Module):
             ):
                 # y : (B, D), apply : (1)
                 def apply_func(y, apply):
+                    t_vec = jnp.ones_like(y)[:, 0, None] * t
                     return apply * jnp.pad(
                         pre_func(
                             jnp.concatenate(
-                                [z_aux, y, jnp.ones_like(y)[:, 0, None] * t], axis=-1
+                                [z_aux, y, jnp.sin(t_vec), jnp.cos(t_vec)], axis=-1
                             )
                         ),
                         ((0, 0), (self.pde_dim - self.num_grid_points, 0)),

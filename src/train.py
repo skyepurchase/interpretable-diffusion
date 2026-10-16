@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import DATASETS
-from eval import evaluate
+from eval import EVALUATORS
 from models import LOSS_LABELS, MODELS, PRETRAIN_STEPPERS, TRAIN_STEPPERS, save_model
 from utils import load_config
 
@@ -154,7 +154,9 @@ def train(
     end = time.perf_counter()
 
     key, eval_key = split(key, num=2)
-    forecast_mae, coeff_mae = evaluate(model, val_loader, local=local, key=eval_key)
+    forecast_mae, coeff_mae = EVALUATORS[config["model"]](
+        model, val_loader, local=local, key=eval_key
+    )
 
     report = f"""# Training report
 - Mean absolute error: {forecast_mae:.2E}
