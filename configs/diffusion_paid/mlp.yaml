@@ -1,0 +1,59 @@
+dataset: pivae
+dataset_config:
+  dir: ./data/pivae
+  system: diffusion
+  batch_size: 64
+  retain_dim: True
+
+model: paid
+model_config:
+  pde:
+    system: diffusion
+    time_dim: 50
+    integral_level: 1.0
+    timestep: 0.05
+    spatial_length: 2.0
+    num_grid_points: 12
+    solver: euler
+
+    phys_param_ranges:
+      - [0.01, 0.1]
+
+  aux_funcs:
+    - latent_dim: 4
+      dims: [256, 256, 256, 64, 32]
+      act: swish
+
+  unmixer:
+    dims: [256, 256]
+    act: swish
+
+  phys_funcs:
+    - latent_dim: 1
+      dims: [256, 256, 256, 64, 32]
+      act: swish
+
+  pre_funcs:
+    - latent_dim: 4
+      dims: [64, 64]
+      act: elu
+
+  post_funcs: []
+
+  num_timesteps: 1000
+  beta_schedule: linear
+  beta_start: 0.0001
+  beta_end: 0.02
+
+  disc_reg: 1e-1
+  phys_reg: 1e-2
+  aug_reg: 1e4
+
+  condition: 10
+
+trainer_config:
+  learning_rate: 1e-3
+  eps: 1e-3
+  epochs: 100
+
+checkpoint_dir: checkpoints/diffusion_paid

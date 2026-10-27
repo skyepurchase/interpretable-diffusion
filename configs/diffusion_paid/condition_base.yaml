@@ -1,44 +1,45 @@
-dataset: pdebench
+dataset: pivae
 dataset_config:
-  dir: ./data/pdebench
-  system: burgers
-  batch_size: 8
+  dir: ./data/pivae
+  system: diffusion
+  batch_size: 16
+  retain_dim: True
 
 model: paid
 model_config:
   unet:
-    in_features: 1
-    base_features: 32
-    feature_multiples: [1, 1, 1, 2]
-    num_blocks: 1
-    attention_resolutions: []
-    attention_heads: 4
-    act: swish
+    in_channels: 1
+    ch: 32
+    ch_mult: [1, 2, 2]
+    num_res_blocks: 1
+    attention_resolutions: [2]
+    num_heads: 4
+    activation: swish
     dropout: True
     dropout_rate: 0.1
 
   pde:
     system: diffusion
-    time_dim: 201
-    integral_level: 1
-    timestep: 0.01
-    spatial_length: 1.
-    num_grid_points: 128
+    time_dim: 50
+    integral_level: 1.0
+    timestep: 0.05
+    spatial_length: 2.0
+    num_grid_points: 12
     solver: euler
 
     phys_param_ranges:
-      - [0.0001, 0.001]
+      - [0.01, 0.1]
 
   aux_funcs:
     - latent_dim: 4
       in_features: -1
-      features: 16
+      features: 32
       act: swish
       dropout: True
       dropout_rate: 0.1
 
   unmixer:
-    dims: [32, 32]
+    dims: [64, 64]
     act: swish
     dropout: True
     dropout_rate: 0.1
@@ -46,15 +47,15 @@ model_config:
   phys_funcs:
     - latent_dim: 1
       in_features: -1
-      features: 16
+      features: 32
       act: swish
       dropout: True
       dropout_rate: 0.1
 
   pre_funcs:
     - latent_dim: 4
-      dims: [32, 32]
-      act: elu
+      dims: [64, 64]
+      act: swish
 
   post_funcs: []
 
@@ -63,18 +64,19 @@ model_config:
   beta_start: 0.0001
   beta_end: 0.02
 
-  alpha: 1
-  beta: 1e-1
-  gamma: 1e10
+  disc_reg: 1e-1
+  phys_reg: 1e-2
+  aug_reg: 1e4
+
+  condition: [CONDITION]
 
   pad:
-    - [0, 7]
+    - [1, 1]
     - [0, 0]
 
 trainer_config:
-  lr: 1e-3
+  learning_rate: 1e-3
   eps: 1e-3
   epochs: 100
-  snapshot_freq: 1
 
-checkpoint_dir: checkpoints/burgers_paid
+checkpoint_dir: checkpoints/diffusion_paid

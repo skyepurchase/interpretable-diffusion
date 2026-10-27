@@ -34,7 +34,7 @@ def noise_estimation_loss(
     alpha = (1 - betas).cumprod(axis=0)[t].reshape(-1, 1, 1, 1)
     noisy_x = data * jnp.sqrt(alpha) + noise * jnp.sqrt(1.0 - alpha)
     x = jnp.concatenate([data[:, :condition], noisy_x[:, condition:]], axis=1)
-    eps = model(jnp.pad(x, [(0, 0), model.pad[0], model.pad[1], (0, 0)]), t)
+    eps = model(jnp.pad(x, [(0, 0), *model.pad, (0, 0)]), t)
     eps = remove_padding(eps, model.pad)
 
     assert eps.shape == noise.shape, (

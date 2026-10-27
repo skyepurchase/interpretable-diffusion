@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from flax import nnx
 
 from models.phys_vae import PhysVAE
-from utils.misc import Distribution
+from utils import Distribution
 
 
 def KL_divergence(
@@ -74,7 +74,7 @@ def ELBO_reconstruction_loss(
         The mean ELBO of the model across the datapoints
     """
     # Calculate ELBO
-    kldiv = jnp.zeros_like(x)[:, 0]
+    kldiv = jnp.zeros(x.shape[0])
     for stat, prior in zip(phys_stats, phys_priors):
         kldiv += KL_divergence(stat[0], stat[1], prior[0], prior[1])
 
@@ -141,10 +141,11 @@ def augmentation_loss(
     for param, param_range in zip(phys_params, model.phys_param_ranges):
         key, aug_key = jax.random.split(key, 2)
         aug_param = jax.lax.stop_gradient(
-            (
-                jax.random.randint(aug_key, param.shape, 0, 1000)
-                * (param_range[1] - param_range[0])
-                / 1000
+            jax.random.uniform(
+                aug_key,
+                param.shape,
+                minval=param_range[0] / 2,
+                maxval=param_range[1] * 2,
             )
             + param_range[0]
         )
@@ -184,14 +185,10 @@ def discrepancy_loss(x_stats: Distribution, mask: jax.Array) -> jax.Array:
     # Calculate discrepancy matrix
     # divergences : (m - 1, m - 1, B)
     divergences = jax.vmap(
-        lambda mu_p, sigma_p: jax.vmap(
-            lambda mu_q, sigma_q: KL_divergence(mu_p, sigma_p, mu_q, sigma_q),
-            in_axes=(0, 0),
-            out_axes=0,
-        )(x_stats[0][:-1], x_stats[1][:-1]),
-        in_axes=(0, 0),
-        out_axes=0,
-    )(x_stats[0][1:], x_stats[1][1:])
+        lambda mu_p: jax.vmap(
+            lambda mu_q: jnp.sum((mu_p - mu_q) ** 2, axis=1),
+        )(x_stats[0][:-1]),
+    )(x_stats[0][1:])
 
     masked_divs = divergences.mean(axis=2) * mask
 
@@ -230,7 +227,7 @@ def loss_fn(
     phys_latents, aux_latents = model.sample_latents(phys_stats, aux_stats, sample_key)
 
     # Decode samples
-    init_y = data[:, : model.num_grid_points].reshape(-1, model.num_grid_points)
+    init_y = data[:, 0].reshape(-1, model.num_grid_points)
     # x_stat : (m, B, T)
     x_stat = model.decode.full_forward(phys_latents, aux_latents, init_y)
 
@@ -238,6 +235,7 @@ def loss_fn(
     rec_err, kldiv = ELBO_reconstruction_loss(
         data, x_stat, phys_stats, aux_stats, phys_priors, aux_priors
     )
+    balance_kldiv = model.kl_balance * kldiv * jnp.exp(model.decode.x_log_sigma)
 
     # Physics latent grounding
     # first entry in x_stat is the physics only generation
@@ -252,7 +250,7 @@ def loss_fn(
     # Discrepancy loss
     disc_loss = model.alpha * discrepancy_loss(x_stat, model.mask)
 
-    full_loss = rec_err + kldiv + disc_loss + phys_loss + data_aug_loss
+    full_loss = rec_err + balance_kldiv + disc_loss + phys_loss + data_aug_loss
 
     return full_loss, jnp.stack(
         [full_loss, rec_err, kldiv, disc_loss, phys_loss, data_aug_loss]

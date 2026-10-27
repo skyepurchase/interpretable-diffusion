@@ -7,13 +7,13 @@ dataset_config:
 model: paid
 model_config:
   unet:
-    in_features: 1
-    base_features: 32
-    feature_multiples: [1, 1, 1, 2]
-    num_blocks: 1
+    in_channels: 1
+    ch: 32
+    ch_mult: [1, 1, 1, 2]
+    num_res_blocks: 1
     attention_resolutions: []
-    attention_heads: 1
-    act: swish
+    num_heads: 1
+    activation: swish
     dropout: True
     dropout_rate: 0.1
 
@@ -84,9 +84,8 @@ model_config:
     - [0, 0]
 
 trainer_config:
-  lr: 1e-3
+  learning_rate: 1e-3
   eps: 1e-3
   epochs: 100
-  snapshot_freq: 1
 
 checkpoint_dir: checkpoints/burgers_paid

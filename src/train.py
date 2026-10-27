@@ -1,28 +1,35 @@
 import time
 from argparse import ArgumentParser
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 import jax
 import optax
 import trackio
-import yaml
 from flax import nnx
-from jax.random import PRNGKey, split
+from jax.random import split
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from datasets import get_dataset
-from models import get_trainer, make_model, save_model
-from utils.config import load_config
-from utils.config.trainer import TrainerConfig
-from utils.misc import TrainStep
-
-NOW = datetime.now().strftime("%y%m%d_%H%M%S")
+from datasets import DATASETS
+from models import LOSS_LABELS, MODELS, TRAIN_STEPPERS
+from utils import load_config
 
 
-def format_time(seconds):
+@dataclass
+class TrainResult:
+    """Result of a training run."""
+
+    model: nnx.Module
+    val_loader: DataLoader
+    final_loss: float
+    best_loss: float
+    best_epoch: int
+    train_time: float
+
+
+def format_time(seconds: float) -> str:
     """Convert seconds into reasonable precision"""
     if seconds < 180:
         return f"{seconds:.2f} seconds"
@@ -35,57 +42,75 @@ def format_time(seconds):
 
 
 def train(
-    model: nnx.Module,
-    train_step: TrainStep,
-    dataloader: DataLoader,
-    cfg: TrainerConfig,
+    config: dict,
+    rngs: nnx.Rngs,
+    local: bool = False,
+    *,
     key: jax.Array,
-    loss_labels: Optional[list[str]] = None,
-    run: str = "",
-    config_string: str = "",
-):
+) -> TrainResult:
     """
-    Train a model given a dataset loader.
+    Train a model given a config.
 
     Parameters
     ----------
-    model : nnx.Module
-        The model to train
-    dataloader : DataLoader
-        A dataloader for the given dataset
-    cfg : TrainerConfig
-        Config specifying epochs and learning rate
-    key : Array
-        PRNG key
-    loss_labels : list[str] = None
-        The labels for each loss term
-    run : str = ""
-        The name of the current run
-    config_string : str = ""
-        The model config
+    config : dict
+        Full configuration dictionary with dataset, model, model_config, trainer_config
+    rngs : nnx.Rngs
+        Flax random number generators for model initialization
+    local : bool = False
+        Whether the program should output information
+    key : jax.Array
+        PRNG key for reproducibility during training
+
+    Returns
+    -------
+    TrainResult
+        Dataclass containing the trained model, validation loader, and training metrics
     """
-    trackio.init(
-        project="Interpretable Diffusion",
-        name=run + "_" + datetime.now().strftime("%m%d-%H%M"),
-        config={
-            "epochs": cfg.epochs,
-            "learning_rate": cfg.lr,
-            # TODO: pass batch_size here
-            "batch_size": next(iter(dataloader))[0].shape[0],
-        },
+    # Load datasets
+    data_key, key = split(key, num=2)
+    train_loader, val_loader, _ = DATASETS[config["dataset"]](
+        **config["dataset_config"], key=data_key
     )
 
-    optimizer = nnx.Optimizer(model, optax.adam(cfg.lr, eps=cfg.eps), wrt=nnx.Param)
+    # Build model using provided rngs
+    model = MODELS[config["model"]](**config["model_config"], rngs=rngs)
 
-    final_loss = 0
-    pbar = tqdm(range(cfg.epochs), desc="Training")
+    # Get stepper and loss labels
+    train_step = TRAIN_STEPPERS[config["model"]]
+    loss_labels = LOSS_LABELS[config["model"]]
+
+    # Extract training parameters
+    epochs = config["trainer_config"]["epochs"]
+    learning_rate = config["trainer_config"]["learning_rate"]
+    eps = config["trainer_config"].get("eps", 1e-8)
+
+    # Setup optimizer
+    optimizer = nnx.Optimizer(model, optax.adam(learning_rate, eps=eps), wrt=nnx.Param)
+
+    # Training loop
+    final_loss = 0.0
+    best_loss = float("inf")
+    best_epoch = 0
+
+    pbar = tqdm(range(epochs)) if local else range(epochs)
+
+    print("\nStarting training steps...\n")
+
     start = time.perf_counter()
-    for _ in pbar:
+    for epoch in pbar:
         running_loss = defaultdict(float)
 
-        for imgs, _ in tqdm(dataloader, desc="Iterating images", leave=False):
+        train_pbar = (
+            tqdm(train_loader, desc="Train batches", leave=False)
+            if local
+            else train_loader
+        )
+        for batch, _ in train_pbar:
             key, train_key = split(key, num=2)
-            losses = train_step(model, imgs, optimizer, key=train_key)
+            losses = train_step(
+                model=model, data=batch, optimizer=optimizer, key=train_key
+            )
 
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 
@@ -95,66 +120,104 @@ def train(
                 ]
 
             for loss_label, loss in zip(loss_labels, losses):
-                running_loss[loss_label] += loss.item() / len(dataloader)
+                running_loss[loss_label] += loss.item() / len(train_loader)
 
+        model.eval()
+        val_pbar = (
+            tqdm(val_loader, desc="Validation batches", leave=False)
+            if local
+            else val_loader
+        )
+        for batch, _ in val_pbar:
+            key, val_key = split(key, num=2)
+            losses = train_step(
+                model=model, data=batch, optimizer=optimizer, key=val_key
+            )
+
+            assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
+
+            running_loss["val_loss"] += losses[0].item() / len(val_loader)
+
+        model.train()
+
+        # Log metrics per epoch (trackio is global singleton, assumed initialized by caller)
         trackio.log(running_loss)
 
-        pbar.set_description(f"Training, loss={running_loss['loss']:.2f}")
+        curr_loss = running_loss["loss"]
+        if best_loss >= curr_loss:
+            best_loss = curr_loss
+            best_epoch = epoch
+
+        if local:
+            assert isinstance(pbar, tqdm)
+            pbar.set_description(
+                f"Training, loss={running_loss['loss']:.2E}, val_loss={running_loss['val_loss']:.2E}"
+            )
+
         final_loss = running_loss["loss"]
+
     end = time.perf_counter()
+    train_time = end - start
 
-    report = f"""# Training report
-- Final loss: {final_loss}
-- Train time: {format_time(end - start)}
-
-## Model config
-```yaml
-{config_string}
-```
-    """
-    trackio.log({"training_report": trackio.Markdown(report)})
-
-    trackio.finish()
+    return TrainResult(
+        model=model,
+        val_loader=val_loader,
+        final_loss=final_loss,
+        best_loss=best_loss,
+        best_epoch=best_epoch,
+        train_time=train_time,
+    )
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-c", "--config", help="path to config file", required=True)
     parser.add_argument("-s", "--seed", type=int, help="seed for the run", default=0)
+    parser.add_argument("--local", action="store_true")
     args = parser.parse_args()
     config = load_config(args.config)
+    print("\nConfig loaded.")
 
-    key = PRNGKey(args.seed)
+    key = jax.random.key(args.seed)
     rngs = nnx.Rngs(args.seed)
 
-    train_loader, val_loader, test_loader = get_dataset(
-        config.dataset, config.dataset_config
-    )
-    config_string = yaml.dump(config.model_config, indent=4, sort_keys=False)
-
-    model = make_model(config.model, config.model_config, rngs=rngs)
-
-    train_step, loss_labels = get_trainer(config.model)
-
+    # Initialize trackio for standalone execution
+    stamp = datetime.now().strftime("%m%d-%H%M")
     run_name = "_".join(
         [
-            config.model,
-            config.dataset,
-            config.dataset_config.get("system", ""),
+            config["model"],
+            config["dataset"],
+            config["dataset_config"].get("system", ""),
+            stamp,
         ]
     )
     run_name = run_name.replace("__", "_")
 
-    key, subkey = split(key)
-    train(
-        model,
-        train_step,
-        train_loader,
-        TrainerConfig(**config.trainer_config),
-        subkey,
-        loss_labels=loss_labels,
-        run=run_name,
-        config_string=config_string,
+    # Load dataset to get batch size for trackio config
+    data_key, init_key = jax.random.split(key)
+    train_loader_temp, val_loader_temp, _ = DATASETS[config["dataset"]](
+        **config["dataset_config"], key=data_key
+    )
+    batch_size = next(iter(train_loader_temp))[0].shape[0]
+
+    trackio.init(
+        project="Interpretable Diffusion",
+        name=run_name,
+        config={
+            "epochs": config["trainer_config"]["epochs"],
+            "learning_rate": config["trainer_config"]["learning_rate"],
+            "batch_size": batch_size,
+        },
     )
 
-    save_model(model, config.checkpoint_dir)
+    print("\nSetup complete.")
+
+    result = train(config, rngs=rngs, local=args.local, key=init_key)
+
+    print("\nTraining complete.")
+    print(f"Final loss: {result.final_loss:.2E}")
+    print(f"Best loss: {result.best_loss:.2E}")
+    print(f"Best epoch: {result.best_epoch}")
+    print(f"Train time: {format_time(result.train_time)}")
+
+    trackio.finish()

@@ -3,9 +3,13 @@ from typing import Callable
 import jax
 import jax.numpy as jnp
 from diffrax import Euler
+from diffrax._custom_types import RealScalarLike
+from jaxtyping import PyTree
+
+Operator = Callable[[RealScalarLike, PyTree, PyTree], PyTree]
 
 
-def pendulum_model(y: jax.Array, omega: jax.Array) -> jax.Array:
+def pendulum_model(_t: RealScalarLike, y: jax.Array, a_list: jax.Array) -> jax.Array:
     """
     Calculate the simple harmonic oscillator ODE.
     d2y_dt2 + omega*sin(y) = 0
@@ -22,24 +26,35 @@ def pendulum_model(y: jax.Array, omega: jax.Array) -> jax.Array:
     dy : (B, 2)
         The output dynamics, dy and ddy
     """
-    return jnp.concatenate(
-        [y[:, 1].reshape(-1, 1), -(omega**2) * jnp.sin(y[:, 0].reshape(-1, 1))], axis=1
-    )
+    omega = a_list[0]
+
+    theta, theta_dot = jnp.split(y, 2, axis=-1)
+    dtheta_dot = -(omega**2 * jnp.sin(theta))
+
+    return jnp.concatenate([theta_dot, dtheta_dot], axis=1)
 
 
-def make_diffusion_model(ds: jax.Array) -> Callable[[jax.Array, jax.Array], jax.Array]:
+def make_diffusion_model(ds: jax.Array, boundary: str | float = 0.0) -> Operator:
     """Create diffusion physics model with given spatial discretisation"""
 
-    def diffusion_model(y: jax.Array, a: jax.Array) -> jax.Array:
+    assert boundary == "periodic" or isinstance(boundary, float), (
+        f"Expected boundary to be either be 'periodic' or a float, received {boundary}."
+    )
+
+    def diffusion_model(
+        _t: RealScalarLike, y: jax.Array, a_list: jax.Array
+    ) -> jax.Array:
         """
         Calculate the simple diffusion ODE.
         dy_dt - a*d2y_ds2 = 0
 
         Parameters
         ----------
+        t : (B,)
+            The current timestep
         y : (B, L)
             The input dynamics, y
-        a : (1,)
+        a_list : list[(B,)]
             The known parameter of the diffusion system
 
         Returns
@@ -47,10 +62,21 @@ def make_diffusion_model(ds: jax.Array) -> Callable[[jax.Array, jax.Array], jax.
         dy : (B, L)
             The output dynamics, dy_dt
         """
-        interior = y[:, 1:-1]
+        a = a_list[0]
+        assert len(y.shape) == 2, (
+            f"Expected y to have shape (B, L) but received {y.shape}."
+        )
+        assert y.shape[0] == a.shape[0], (
+            f"Expected y and a to have the same batch, {y.shape[0]} != {a.shape[0]}."
+        )
+
+        if boundary == "periodic":
+            bound_y = jnp.concatenate([y[:, -2:], y, y[:, :2]], axis=1)
+        else:
+            bound_y = y
 
         # finite differences
-        dy_ds = jnp.gradient(interior, ds, axis=1)
+        dy_ds = jnp.gradient(bound_y, ds, axis=1)
         assert not isinstance(dy_ds, list)
 
         d2y_ds2 = jnp.gradient(dy_ds, ds, axis=1)
@@ -59,16 +85,21 @@ def make_diffusion_model(ds: jax.Array) -> Callable[[jax.Array, jax.Array], jax.
         # generate derivatives
         dy_dt = a * d2y_ds2
 
-        full_dy_dt = jnp.pad(dy_dt, ((0, 0), (1, 1)))
-
-        return full_dy_dt
+        if boundary == "periodic":
+            return dy_dt[:, 2:-2]
+        elif isinstance(boundary, float):
+            return jnp.pad(dy_dt[:, 1:-1], ((0, 0), (1, 1)), constant_values=boundary)
+        else:
+            raise ValueError(
+                f"Expected boundary to be either be 'periodic' or a float, received {boundary}."
+            )
 
     return diffusion_model
 
 
 def get_physics_model(
     system: str,
-) -> tuple[Callable[[jax.Array], Callable[..., jax.Array]], int, int]:
+) -> tuple[Callable[[jax.Array, str | float], Operator], int, int]:
     """
     Helper function to get a desired physics system model along with the expected number of physics parameters and time derivatives.
 
@@ -86,14 +117,14 @@ def get_physics_model(
         The number of time derivatives of the model
     """
     if system == "pendulum":
-        return lambda _: pendulum_model, 1, 2
+        return lambda _ds, _boundary: pendulum_model, 1, 2
     if system == "diffusion":
         return make_diffusion_model, 1, 1
 
     raise NotImplementedError(f"{system} is not implemented.")
 
 
-def get_solver(name: str):
+def get_solver(name: str) -> type[Euler]:
     if name == "euler":
         return Euler
 

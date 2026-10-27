@@ -3,12 +3,12 @@ import os
 import h5py
 import numpy as np
 import torch
+from jaxtyping import PRNGKeyArray
 from torch.utils import data
 from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets.utils import download_url
 
 from datasets.utils import np_collate
-from utils.config.datasets import PDEBenchConfig
 
 SYSTEM_TO_DIR: dict[str, str] = {
     "diff_sorp": "diffusion-sorption/data.h5",
@@ -35,7 +35,7 @@ class PDEBenchDataset(Dataset):
 
     def __init__(self, data_file: str, test: bool = False) -> None:
         if not os.path.isfile(data_file):
-            print(f"File {data_file} was not found")
+            print(f"File {data_file} was not found.")
             quit(1)
 
         self.data = torch.empty(0)
@@ -122,8 +122,6 @@ class DiffusionSorptionDataset(PDEBenchDataset):
         self.t = torch.tensor(t)
         self.data = torch.vstack(data)
 
-        print(self.data.shape)
-
 
 class BurgersDataset(PDEBenchDataset):
     def __init__(self, data_file: str, test: bool = False) -> None:
@@ -173,32 +171,38 @@ SYSTEM_TO_DATASET = {
 }
 
 
-def get_pdebench(cfg: PDEBenchConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
-    if cfg.system not in SYSTEM_TO_DIR:
-        print(f"{cfg.system} is not supported.")
+def get_pdebench(
+    dir: str,
+    system: str,
+    batch_size: int = 128,
+    *,
+    key: PRNGKeyArray,
+) -> tuple[DataLoader, DataLoader, DataLoader]:
+    if system not in SYSTEM_TO_DIR:
+        print(f"{system} is not supported.")
         quit(1)
-    filename = os.path.join(cfg.dir, SYSTEM_TO_DIR[cfg.system])
+    filename = os.path.join(dir, SYSTEM_TO_DIR[system])
 
     if not os.path.isfile(filename):
         print("Data file not found. Downloading data ...")
         download_url(
-            SYSTEM_TO_LINK[cfg.system],
+            SYSTEM_TO_LINK[system],
             os.path.dirname(filename),
             os.path.basename(filename),
         )
 
-    dataset = SYSTEM_TO_DATASET[cfg.system](filename)
-    test = SYSTEM_TO_DATASET[cfg.system](filename, test=True)
+    dataset = SYSTEM_TO_DATASET[system](filename)
+    test = SYSTEM_TO_DATASET[system](filename, test=True)
     train, val = data.random_split(dataset, [0.8, 0.2])
 
     train_loader = DataLoader(
-        train, batch_size=cfg.batch_size, collate_fn=np_collate, shuffle=True
+        train, batch_size=batch_size, collate_fn=np_collate, shuffle=True
     )
     val_loader = DataLoader(
-        val, batch_size=cfg.batch_size, collate_fn=np_collate, shuffle=False
+        val, batch_size=batch_size, collate_fn=np_collate, shuffle=False
     )
     test_loader = DataLoader(
-        test, batch_size=cfg.batch_size, collate_fn=np_collate, shuffle=False
+        test, batch_size=batch_size, collate_fn=np_collate, shuffle=False
     )
 
     return train_loader, val_loader, test_loader

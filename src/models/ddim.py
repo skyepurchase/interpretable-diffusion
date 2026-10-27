@@ -4,7 +4,6 @@ from diffuse.neural_network.nn import CondUNet2D
 from flax import nnx
 
 from models.modules.acts import ACTS
-from utils.config.models import DDIMConfig
 
 
 def compute_betas(
@@ -42,26 +41,44 @@ class DDIM(nnx.Module):
         A PRNG key
     """
 
-    def __init__(self, cfg: DDIMConfig, rngs: nnx.Rngs) -> None:
-        self.num_timesteps = cfg.num_timesteps
+    def __init__(
+        self,
+        num_timesteps: int,
+        in_features: int,
+        base_features: int,
+        feature_multiples: tuple[int, ...],
+        attention_resolutions: tuple[int, ...],
+        attention_heads: int,
+        num_blocks: int = 2,
+        act: str = "swish",
+        dropout: bool = True,
+        dropout_rate: float = 0.1,
+        beta_schedule: str = "linear",
+        beta_start: float = 1e-4,
+        beta_end: float = 0.02,
+        pad: list[tuple] = [(0, 0), (0, 0)],
+        *,
+        rngs: nnx.Rngs,
+    ) -> None:
+        self.num_timesteps = num_timesteps
         self.betas = compute_betas(
-            cfg.beta_schedule, cfg.beta_start, cfg.beta_end, self.num_timesteps
+            beta_schedule, beta_start, beta_end, self.num_timesteps
         )
 
         self.denoiser = CondUNet2D(
-            in_channels=cfg.in_features,
-            ch=cfg.base_features,
-            ch_mult=cfg.feature_multiples,
-            num_res_blocks=cfg.num_blocks,
-            attention_resolutions=cfg.attention_resolutions,
-            activation=ACTS[cfg.act],
-            dropout=cfg.dropout,
-            dropout_rate=cfg.dropout_rate,
-            num_heads=cfg.attention_heads,
+            in_channels=in_features,
+            ch=base_features,
+            ch_mult=feature_multiples,
+            num_res_blocks=num_blocks,
+            attention_resolutions=attention_resolutions,
+            activation=ACTS[act],
+            dropout=dropout,
+            dropout_rate=dropout_rate,
+            num_heads=attention_heads,
             rngs=rngs,
         )
 
-        self.pad = cfg.pad
+        self.pad = pad
 
     def __call__(self, x: jax.Array, t: jax.Array) -> jax.Array:
         """Wrapper to return the output itself"""

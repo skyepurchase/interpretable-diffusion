@@ -34,7 +34,7 @@ model_config:
 
   system: diffusion
   time_dim: 50
-  integral_level: 1.0
+  integral_level: 1
   timestep: 0.05
   length: 2.0
   num_grid_points: 12
@@ -45,7 +45,7 @@ model_config:
   gamma: 1
 
 trainer_config:
-  lr: 1e-3
+  learning_rate: 1e-3
   eps: 1e-3
   epochs: 100
 
