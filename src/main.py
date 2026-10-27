@@ -1,4 +1,3 @@
-import sys
 from argparse import ArgumentParser
 from datetime import datetime
 
@@ -7,10 +6,9 @@ import trackio
 from flax import nnx
 from jax.random import split
 
-from datasets import DATASETS
 from eval import EVALUATORS
 from models import save_model
-from train import TrainResult, train
+from train import train
 from utils import load_config
 
 
@@ -35,8 +33,9 @@ def main() -> None:
     config = load_config(args.config)
     print("\nConfig loaded.")
 
-    # Own the seed
+    # Own the seed and initialize rngs
     key = jax.random.key(args.seed)
+    rngs = nnx.Rngs(args.seed)
 
     # Compute run name and stamp
     stamp = datetime.now().strftime("%m%d-%H%M")
@@ -67,8 +66,8 @@ def main() -> None:
 
     print("\nSetup complete. Starting training...")
 
-    # Train
-    result = train(config, local=args.local, key=train_key)
+    # Train with rngs and train_key
+    result = train(config, rngs=rngs, local=args.local, key=train_key)
 
     # Save model
     print("\nSaving model...")

@@ -22,10 +22,10 @@ def sweep_conditions(
     val_loader: DataLoader,
     checkpoint_dir: str,
     run_base: str,
+    rngs: nnx.Rngs,
     local: bool = False,
     *,
     key: PRNGKeyArray,
-    rngs: nnx.Rngs,
 ):
     """
     Sweep over different condition values.
@@ -46,12 +46,12 @@ def sweep_conditions(
         Directory to save checkpoints
     run_base : str
         Base run name
+    rngs : nnx.Rngs
+        Flax random number generators for model initialization
     local : bool
         Whether to output information locally
     key : PRNGKeyArray
-        PRNG key for reproducibility
-    rngs : nnx.Rngs
-        Flax random number generators
+        PRNG key for reproducibility during training
     """
     for condition in conditions:
         print(f"\nTRAINING WITH CONDITION PERIOD k={condition}\n")
@@ -79,8 +79,8 @@ def sweep_conditions(
         # Split key for this condition
         key, subkey = jax.random.split(key)
 
-        # Run training
-        result = train(config, local=local, key=subkey)
+        # Run training with rngs
+        result = train(config, rngs=rngs, local=local, key=subkey)
 
         # Save model
         print("\nSaving model...")
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         val_loader=val_loader,
         checkpoint_dir=config["checkpoint_dir"],
         run_base=run_name,
+        rngs=rngs,
         local=args.local,
         key=key,
-        rngs=rngs,
     )

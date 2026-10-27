@@ -43,6 +43,7 @@ def format_time(seconds: float) -> str:
 
 def train(
     config: dict,
+    rngs: nnx.Rngs,
     local: bool = False,
     *,
     key: jax.Array,
@@ -54,10 +55,12 @@ def train(
     ----------
     config : dict
         Full configuration dictionary with dataset, model, model_config, trainer_config
+    rngs : nnx.Rngs
+        Flax random number generators for model initialization
     local : bool = False
         Whether the program should output information
     key : jax.Array
-        PRNG key for reproducibility
+        PRNG key for reproducibility during training
 
     Returns
     -------
@@ -70,8 +73,7 @@ def train(
         **config["dataset_config"], key=data_key
     )
 
-    # Build model
-    rngs = nnx.Rngs(0)
+    # Build model using provided rngs
     model = MODELS[config["model"]](**config["model_config"], rngs=rngs)
 
     # Get stepper and loss labels
@@ -177,6 +179,7 @@ if __name__ == "__main__":
     print("\nConfig loaded.")
 
     key = jax.random.key(args.seed)
+    rngs = nnx.Rngs(args.seed)
 
     # Initialize trackio for standalone execution
     stamp = datetime.now().strftime("%m%d-%H%M")
@@ -209,7 +212,7 @@ if __name__ == "__main__":
 
     print("\nSetup complete.")
 
-    result = train(config, local=args.local, key=init_key)
+    result = train(config, rngs=rngs, local=args.local, key=init_key)
 
     print("\nTraining complete.")
     print(f"Final loss: {result.final_loss:.2E}")
