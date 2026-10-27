@@ -1,27 +1,35 @@
 import time
 from argparse import ArgumentParser
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Optional
 
 import jax
 import optax
 import trackio
-import yaml
 from flax import nnx
 from jax.random import split
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import DATASETS
-from eval import EVALUATORS
-from models import LOSS_LABELS, MODELS, PRETRAIN_STEPPERS, TRAIN_STEPPERS, save_model
+from models import LOSS_LABELS, MODELS, TRAIN_STEPPERS
 from utils import load_config
 
-NOW = datetime.now().strftime("%y%m%d_%H%M%S")
+
+@dataclass
+class TrainResult:
+    """Result of a training run."""
+
+    model: nnx.Module
+    val_loader: DataLoader
+    final_loss: float
+    best_loss: float
+    best_epoch: int
+    train_time: float
 
 
-def format_time(seconds):
+def format_time(seconds: float) -> str:
     """Convert seconds into reasonable precision"""
     if seconds < 180:
         return f"{seconds:.2f} seconds"
@@ -34,59 +42,52 @@ def format_time(seconds):
 
 
 def train(
-    model: nnx.Module,
-    train_step: Callable,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    epochs: int,
-    learning_rate: float,
-    eps: float = 1e-8,
-    loss_labels: Optional[list[str]] = None,
-    run: str = "",
-    config_string: str = "",
+    config: dict,
     local: bool = False,
-    pretrain: bool = False,
     *,
     key: jax.Array,
-):
+) -> TrainResult:
     """
-    Train a model given a dataset loader.
+    Train a model given a config.
 
     Parameters
     ----------
-    model : nnx.Module
-        The model to train
-    train_loader : DataLoader
-        A train_loader for the given dataset
-    val_loader : DataLoader
-        A val_loader for the given dataset
-    cfg : TrainerConfig
-        Config specifying epochs and learning rate
-    key : Array
-        PRNG key
-    loss_labels : list[str] = None
-        The labels for each loss term
-    run : str = ""
-        The name of the current run
-    config_string : str = ""
-        The model config
+    config : dict
+        Full configuration dictionary with dataset, model, model_config, trainer_config
     local : bool = False
         Whether the program should output information
+    key : jax.Array
+        PRNG key for reproducibility
+
+    Returns
+    -------
+    TrainResult
+        Dataclass containing the trained model, validation loader, and training metrics
     """
-    trackio.init(
-        project="Interpretable Diffusion",
-        name=run,
-        config={
-            "epochs": epochs,
-            "learning_rate": learning_rate,
-            # TODO: pass batch_size here
-            "batch_size": next(iter(train_loader))[0].shape[0],
-        },
+    # Load datasets
+    data_key, key = split(key, num=2)
+    train_loader, val_loader, _ = DATASETS[config["dataset"]](
+        **config["dataset_config"], key=data_key
     )
 
+    # Build model
+    rngs = nnx.Rngs(0)
+    model = MODELS[config["model"]](**config["model_config"], rngs=rngs)
+
+    # Get stepper and loss labels
+    train_step = TRAIN_STEPPERS[config["model"]]
+    loss_labels = LOSS_LABELS[config["model"]]
+
+    # Extract training parameters
+    epochs = config["trainer_config"]["epochs"]
+    learning_rate = config["trainer_config"]["learning_rate"]
+    eps = config["trainer_config"].get("eps", 1e-8)
+
+    # Setup optimizer
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate, eps=eps), wrt=nnx.Param)
 
-    final_loss = 0
+    # Training loop
+    final_loss = 0.0
     best_loss = float("inf")
     best_epoch = 0
 
@@ -137,6 +138,7 @@ def train(
 
         model.train()
 
+        # Log metrics per epoch (trackio is global singleton, assumed initialized by caller)
         trackio.log(running_loss)
 
         curr_loss = running_loss["loss"]
@@ -145,46 +147,24 @@ def train(
             best_epoch = epoch
 
         if local:
-            assert isinstance(pbar, tqdm)  # For type hints
+            assert isinstance(pbar, tqdm)
             pbar.set_description(
-                f"{'Pre' if pretrain else ''}Training, loss={running_loss['loss']:.2E}, val_loss={running_loss['val_loss']:.2E}"
+                f"Training, loss={running_loss['loss']:.2E}, val_loss={running_loss['val_loss']:.2E}"
             )
 
         final_loss = running_loss["loss"]
+
     end = time.perf_counter()
+    train_time = end - start
 
-    key, eval_key = split(key, num=2)
-    forecast_mae, coeff_mae = EVALUATORS[config["model"]](
-        model, val_loader, local=local, key=eval_key
+    return TrainResult(
+        model=model,
+        val_loader=val_loader,
+        final_loss=final_loss,
+        best_loss=best_loss,
+        best_epoch=best_epoch,
+        train_time=train_time,
     )
-
-    report = f"""# Training report
-- Mean absolute error: {forecast_mae:.2E}
-- Coefficient error: {coeff_mae:.2E}
-- Final loss: {final_loss:.2E}
-- Train time: {format_time(end - start)}
-
-## Model config
-```yaml
-{config_string}
-```
-    """
-    trackio.log({"training_report": trackio.Markdown(report)})
-
-    trackio.finish()
-
-    if not local:
-        print(
-            f"""
-# Training Report
-absolute error: {forecast_mae}
-Coefficient error: {coeff_mae}
-Final loss: {final_loss}
-Best loss: {best_loss:.2E}
-Best epoch: {best_epoch}
-Train time: {format_time(end - start)}
-"""
-        )
 
 
 if __name__ == "__main__":
@@ -197,21 +177,8 @@ if __name__ == "__main__":
     print("\nConfig loaded.")
 
     key = jax.random.key(args.seed)
-    rngs = nnx.Rngs(args.seed)
 
-    data_key, key = jax.random.split(key)
-    train_loader, val_loader, _ = DATASETS[config["dataset"]](
-        **config["dataset_config"], key=data_key
-    )
-
-    config_string = yaml.dump(config, indent=4, sort_keys=False)
-
-    model = MODELS[config["model"]](**config["model_config"], rngs=rngs)
-
-    pretrain_step = PRETRAIN_STEPPERS.get(config["model"])
-    train_step = TRAIN_STEPPERS[config["model"]]
-    loss_labels = LOSS_LABELS[config["model"]]
-
+    # Initialize trackio for standalone execution
     stamp = datetime.now().strftime("%m%d-%H%M")
     run_name = "_".join(
         [
@@ -223,38 +190,31 @@ if __name__ == "__main__":
     )
     run_name = run_name.replace("__", "_")
 
-    print("\nSetup complete.")
+    # Load dataset to get batch size for trackio config
+    data_key, init_key = jax.random.split(key)
+    train_loader_temp, val_loader_temp, _ = DATASETS[config["dataset"]](
+        **config["dataset_config"], key=data_key
+    )
+    batch_size = next(iter(train_loader_temp))[0].shape[0]
 
-    if pretrain_step is not None:
-        key, subkey = split(key)
-        train(
-            model,
-            pretrain_step,
-            train_loader,
-            **config["trainer_config"],
-            loss_labels=["loss"],
-            run="pretrain_" + run_name,
-            config_string=config_string,
-            local=args.local,
-            pretrain=True,
-            key=subkey,
-        )
-
-    key, subkey = split(key)
-    train(
-        model,
-        train_step,
-        train_loader,
-        val_loader,
-        **config["trainer_config"],
-        loss_labels=loss_labels,
-        run=run_name,
-        config_string=config_string,
-        local=args.local,
-        pretrain=False,
-        key=subkey,
+    trackio.init(
+        project="Interpretable Diffusion",
+        name=run_name,
+        config={
+            "epochs": config["trainer_config"]["epochs"],
+            "learning_rate": config["trainer_config"]["learning_rate"],
+            "batch_size": batch_size,
+        },
     )
 
-    print("\nSaving model...")
-    save_model(model, config["checkpoint_dir"], stamp)
-    print("Saved.")
+    print("\nSetup complete.")
+
+    result = train(config, local=args.local, key=init_key)
+
+    print("\nTraining complete.")
+    print(f"Final loss: {result.final_loss:.2E}")
+    print(f"Best loss: {result.best_loss:.2E}")
+    print(f"Best epoch: {result.best_epoch}")
+    print(f"Train time: {format_time(result.train_time)}")
+
+    trackio.finish()

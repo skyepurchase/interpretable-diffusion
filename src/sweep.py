@@ -1,74 +1,104 @@
-from typing import Callable, Optional
+import copy
+from argparse import ArgumentParser
+from datetime import datetime
 
-from flax.nnx import Rngs
+import jax
+import trackio
+from flax import nnx
 from jaxtyping import PRNGKeyArray
 from torch.utils.data import DataLoader
 
-from models import MODELS, save_model
+from datasets import DATASETS
+from models import save_model
 from train import train
+from utils import load_config
 
 
 def sweep_conditions(
     model_name: str,
-    config: dict,
+    base_config: dict,
     conditions: list[int],
-    train_step: Callable,
     train_loader: DataLoader,
     val_loader: DataLoader,
     checkpoint_dir: str,
-    epochs: int,
-    learning_rate: float,
-    eps: float = 1e-8,
-    loss_labels: Optional[list[str]] = None,
-    run_base: str = "",
-    config_string: str = "",
+    run_base: str,
     local: bool = False,
     *,
     key: PRNGKeyArray,
-    rngs: Rngs,
+    rngs: nnx.Rngs,
 ):
+    """
+    Sweep over different condition values.
+
+    Parameters
+    ----------
+    model_name : str
+        Name of the model
+    base_config : dict
+        Base model configuration
+    conditions : list[int]
+        List of condition values to try
+    train_loader : DataLoader
+        Training data loader
+    val_loader : DataLoader
+        Validation data loader
+    checkpoint_dir : str
+        Directory to save checkpoints
+    run_base : str
+        Base run name
+    local : bool
+        Whether to output information locally
+    key : PRNGKeyArray
+        PRNG key for reproducibility
+    rngs : nnx.Rngs
+        Flax random number generators
+    """
     for condition in conditions:
         print(f"\nTRAINING WITH CONDITION PERIOD k={condition}\n")
 
-        config["condition"] = condition
-        model = MODELS[model_name](**config, rngs=rngs)
+        # Create config for this condition
+        config = copy.deepcopy(base_config)
+        config["model_config"]["condition"] = condition
 
+        # Build run name with condition
         stamp = datetime.now().strftime("%m%d-%H%M")
-        run = run_base + f"_{stamp}_{condition}"
+        run_name = f"{run_base}_{stamp}_{condition}"
 
-        train(
-            model,
-            train_step,
-            train_loader,
-            val_loader,
-            epochs,
-            learning_rate,
-            eps,
-            loss_labels,
-            run,
-            config_string,
-            local,
-            pretrain=False,
-            key=key,
+        # Initialize trackio for this condition
+        trackio.init(
+            project="Interpretable Diffusion",
+            name=run_name,
+            config={
+                "condition": condition,
+                "model": model_name,
+                "dataset": config.get("dataset", "pivae"),
+                **config.get("trainer_config", {}),
+            },
         )
 
+        # Split key for this condition
+        key, subkey = jax.random.split(key)
+
+        # Run training
+        result = train(config, local=local, key=subkey)
+
+        # Save model
         print("\nSaving model...")
-        save_model(model, checkpoint_dir, stamp)
+        save_model(result.model, checkpoint_dir, stamp)
         print("Saved.")
+
+        print(
+            f"\nCondition {condition} complete:"
+            f" Final loss: {result.final_loss:.2E}"
+            f" Best loss: {result.best_loss:.2E}"
+            f" Best epoch: {result.best_epoch}"
+            f" Train time: {result.train_time:.2f}s"
+        )
+
+        trackio.finish()
 
 
 if __name__ == "__main__":
-    from argparse import ArgumentParser
-    from datetime import datetime
-
-    import jax
-    import yaml
-    from flax import nnx
-
-    from datasets import DATASETS
-    from models import LOSS_LABELS, TRAIN_STEPPERS
-    from utils import load_config
-
     parser = ArgumentParser()
     parser.add_argument("-c", "--config", help="path to config file", required=True)
     parser.add_argument(
@@ -92,11 +122,6 @@ if __name__ == "__main__":
         **config["dataset_config"], key=data_key
     )
 
-    config_string = yaml.dump(config["dataset_config"], indent=4, sort_keys=False)
-
-    train_step = TRAIN_STEPPERS[config["model"]]
-    loss_labels = LOSS_LABELS[config["model"]]
-
     run_name = "_".join(
         [
             config["model"],
@@ -110,16 +135,12 @@ if __name__ == "__main__":
 
     sweep_conditions(
         model_name=config["model"],
-        config=config["model_config"],
+        base_config=config,
         conditions=args.conditions,
-        train_step=train_step,
         train_loader=train_loader,
         val_loader=val_loader,
         checkpoint_dir=config["checkpoint_dir"],
-        **config["trainer_config"],
-        loss_labels=loss_labels,
         run_base=run_name,
-        config_string=config_string,
         local=args.local,
         key=key,
         rngs=rngs,
