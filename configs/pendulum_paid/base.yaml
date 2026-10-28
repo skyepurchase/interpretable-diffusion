@@ -8,12 +8,6 @@ dataset_config:
   time: 2.5
   x_grid: 1
   t_grid: 50
-  phys_param_ranges:
-    - [0.7853981633974483, 3.141592653589793] # omega
-    - [0.0, 0.8] # xi
-    - [3.141592653589793, 6.283185307179586] # phi
-    - [0.0, 40.0] # A
-  seed: 169800
   n_samples: 3000
   test_split: 1000
   validation_split: 500

@@ -12,6 +12,11 @@ from torch.utils.data import DataLoader, Dataset
 
 from datasets.utils import np_collate
 
+# Fixed dataset generation seed. Hardcoded (not exposed in configs) so the
+# generated dataset is always identical regardless of when or how often it
+# is created.
+GENERATION_SEED = 169800
+
 
 class PiVAEDataset(Dataset):
     """A wrapper of the torch Dataset for the PiVAE datasets."""
@@ -77,9 +82,9 @@ def generate_pendulum_data(
     x_grid: int = 1,
     time: float = 2.5,
     phys_param_ranges: tuple = (
-        (0.7853981633974483, 3.141592653589793),  # omega
+        (jnp.pi / 4, jnp.pi),  # omega
         (0.0, 0.8),  # xi
-        (3.141592653589793, 6.283185307179586),  # phi
+        (jnp.pi, 2 * jnp.pi),  # phi
         (0.0, 40.0),  # A
     ),
     *,
@@ -307,16 +312,16 @@ def burgers_ODE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]
 
     Returns
     -------
-    func : (t, y, nu) -> dy
+    func : (t, y, phys_param) -> dy
         The function that progresses y according to the ODE.
     """
 
-    def step(_t: RealScalarLike, y: PyTree, nu: PyTree) -> PyTree:
+    def step(_t: RealScalarLike, y: PyTree, phys_param: PyTree) -> PyTree:
         assert len(y.shape) == 2, (
             f"Expected y to have shape (B, L) but received {y.shape}."
         )
-        assert y.shape[0] == nu.shape[0], (
-            f"Expected y and nu to have the same batch size, {y.shape[0]} != {nu.shape[0]}"
+        assert y.shape[0] == phys_param.shape[0], (
+            f"Expected y and phys_param to have the same batch size, {y.shape[0]} != {phys_param.shape[0]}"
         )
 
         # Periodic boundary condition
@@ -341,7 +346,7 @@ def burgers_ODE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]
         )
 
         # Viscous Burgers
-        looped_dy_dt = (nu * d2y_ds2) + (
+        looped_dy_dt = (phys_param * d2y_ds2) + (
             flux_interface[:, :-1] - flux_interface[:, 1:]
         ) / ds
 
@@ -358,7 +363,7 @@ def generate_burgers_data(
     length: float = 1.0,
     waves: int = 4,
     phys_param_ranges: tuple = (
-        (0.001, 0.01),  # nu
+        (0.001, 0.01),  # viscosity
     ),
     *,
     key: PRNGKeyArray,
@@ -381,14 +386,14 @@ def generate_burgers_data(
     waves : int = 4
         The maximum number of waves in the input
     phys_param_ranges : tuple of (min, max) pairs
-        The sampling ranges of the physics parameters, in the order (nu,)
+        The sampling ranges of the physics parameters, in the order (viscosity,)
 
     Returns
     -------
     samples : (B, X, T)
         B samples with X spatial grid points and T timesteps.
-    nu : (B, 1)
-        The viscosity of each sample.
+    phys_param : (B, 1)
+        The viscosity parameter of each sample.
     """
     t = jnp.linspace(0, time, t_grid)
     dt = t[1] - t[0]
@@ -415,9 +420,9 @@ def generate_burgers_data(
 
     ode = burgers_ODE(ds)
 
-    key, nu_key = jax.random.split(key)
-    nu = jax.random.uniform(
-        nu_key,
+    key, param_key = jax.random.split(key)
+    phys_param = jax.random.uniform(
+        param_key,
         (n_samples, 1),
         minval=phys_param_ranges[0][0],
         maxval=phys_param_ranges[0][1],
@@ -425,13 +430,20 @@ def generate_burgers_data(
 
     # sol : (T, B, X)
     sol = diffeqsolve(
-        ODETerm(ode), Euler(), t0=0, t1=time, dt0=dt, y0=y, args=nu, saveat=SaveAt(ts=t)
+        ODETerm(ode),
+        Euler(),
+        t0=0,
+        t1=time,
+        dt0=dt,
+        y0=y,
+        args=phys_param,
+        saveat=SaveAt(ts=t),
     ).ys
     if sol is None:
         raise RuntimeError("ODE solution returned None")
 
     # samples : (B, X + 1, T)
-    return jnp.permute_dims(sol, (1, 2, 0)), nu
+    return jnp.permute_dims(sol, (1, 2, 0)), phys_param
 
 
 SYSTEMS = {
@@ -446,7 +458,7 @@ def get_pivae(
     system: str,
     length: float,
     time: float,
-    phys_param_ranges: list,
+    phys_param_ranges: list | None = None,
     n_samples: int = 3000,
     test_split: int = 1000,
     validation_split: int = 500,
@@ -455,19 +467,14 @@ def get_pivae(
     x_grid: int = 12,
     batch_size: int = 128,
     retain_dim: bool = False,
-    seed: int = 169800,
     *,
     key: PRNGKeyArray,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Create pivae train, val, and test dataloaders.
 
-    The dataset is defined entirely by this configuration: the domain
-    (`length` x `time` on an `x_grid` x `t_grid` discretisation), the
-    `phys_param_ranges` sampled when generating each trajectory, the split
-    sizes, and the generation `seed`. Generation is driven by the fixed
-    config seed so the dataset is identical regardless of the run seed; the
-    run key only controls the permutation used to draw the training split
-    from the pool.
+    The dataset is defined by this configuration (domain, grids, parameter
+    ranges, and split sizes); the generation seed is fixed so the dataset is
+    identical regardless of the run seed.
     """
     assert test_split + validation_split + train_split <= n_samples
 
@@ -486,7 +493,11 @@ def get_pivae(
     ):
         print("\nGenerating samples...")
 
-        sample_key = jax.random.key(seed)
+        sample_key = jax.random.key(GENERATION_SEED)
+
+        gen_kwargs = {}
+        if phys_param_ranges is not None:
+            gen_kwargs["phys_param_ranges"] = phys_param_ranges
 
         samples, coeffs = SYSTEMS[system](
             n_samples,
@@ -494,7 +505,7 @@ def get_pivae(
             x_grid=x_grid,
             time=time,
             length=length,
-            phys_param_ranges=phys_param_ranges,
+            **gen_kwargs,
             key=sample_key,
         )
         assert samples.shape == (n_samples, x_grid, t_grid), (

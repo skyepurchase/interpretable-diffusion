@@ -10,7 +10,6 @@ dataset_config:
   t_grid: 128
   phys_param_ranges:
     - [0.001, 0.01]
-  seed: 169800
   n_samples: 3000
   test_split: 1000
   validation_split: 500

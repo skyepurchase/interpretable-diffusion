@@ -9,7 +9,7 @@ def get_burgers(
     system: str,
     length: float = 1.0,
     time: float = 0.1,
-    phys_param_ranges: list = [[0.001, 0.01]],
+    phys_param_ranges: list | None = None,
     n_samples: int = 3000,
     test_split: int = 1000,
     validation_split: int = 500,
@@ -18,7 +18,6 @@ def get_burgers(
     x_grid: int = 128,
     batch_size: int = 128,
     retain_dim: bool = False,
-    seed: int = 169800,
     *,
     key: PRNGKeyArray,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
@@ -37,6 +36,5 @@ def get_burgers(
         x_grid=x_grid,
         batch_size=batch_size,
         retain_dim=retain_dim,
-        seed=seed,
         key=key,
     )

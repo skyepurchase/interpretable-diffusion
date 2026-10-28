@@ -11,7 +11,6 @@ dataset_config:
   phys_param_ranges:
     - [0.01, 0.1]
     - [0.01, 0.1]
-  seed: 169800
   n_samples: 3000
   test_split: 1000
   validation_split: 500
