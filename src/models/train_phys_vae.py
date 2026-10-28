@@ -157,7 +157,8 @@ def augmentation_loss(
     model.train()
     aug_loss = jnp.zeros(())
     for phys_func, aug_param in zip(model.encode.phys_funcs, aug_params):
-        aug_loss += jnp.pow(phys_func(aug_x_mean) - aug_param, 2).sum(axis=1).mean()
+        mu, _ = jnp.split(phys_func(aug_x_mean), 2, axis=1)
+        aug_loss += jnp.pow(mu - aug_param, 2).sum(axis=1).mean()
 
     return aug_loss
 

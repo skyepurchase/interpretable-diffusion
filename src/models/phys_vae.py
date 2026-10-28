@@ -713,7 +713,8 @@ class PhysVAE(nnx.Module):
             key, sample_key = jax.random.split(key, 2)
 
             samples = stat[0] + (
-                jax.random.normal(sample_key, stat[0].shape) * jnp.exp(stat[1])
+                jax.random.normal(sample_key, stat[0].shape)
+                * jnp.exp(0.5 * stat[1])
             )
 
             scaled_param = jnp.clip(samples, param_range[0], param_range[1])
@@ -725,7 +726,8 @@ class PhysVAE(nnx.Module):
             key, sample_key = jax.random.split(key, 2)
             aux_latents.append(
                 stat[0]
-                + jax.random.normal(sample_key, stat[0].shape) * jnp.exp(stat[1])
+                + jax.random.normal(sample_key, stat[0].shape)
+                * jnp.exp(0.5 * stat[1])
             )
 
         return phys_latents, aux_latents
