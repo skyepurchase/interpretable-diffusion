@@ -144,10 +144,9 @@ def augmentation_loss(
             jax.random.uniform(
                 aug_key,
                 param.shape,
-                minval=param_range[0] / 2,
-                maxval=param_range[1] * 2,
+                minval=param_range[0],
+                maxval=param_range[1],
             )
-            + param_range[0]
         )
         aug_params.append(aug_param)
 
