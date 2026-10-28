@@ -119,6 +119,7 @@ if __name__ == "__main__":
     model = load_model(
         config["model"],
         config["model_config"],
+        config["dataset_config"],
         os.path.join(os.getcwd(), config["checkpoint_dir"], args.checkpoint),
         rngs=rngs,
     )

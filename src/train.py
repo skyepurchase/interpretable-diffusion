@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import DATASETS
-from models import LOSS_LABELS, MODELS, TRAIN_STEPPERS
+from models import LOSS_LABELS, TRAIN_STEPPERS, make_model
 from utils import load_config
 
 
@@ -74,7 +74,12 @@ def train(
     )
 
     # Build model using provided rngs
-    model = MODELS[config["model"]](**config["model_config"], rngs=rngs)
+    model = make_model(
+        config["model"],
+        config["model_config"],
+        config["dataset_config"],
+        rngs=rngs,
+    )
 
     # Get stepper and loss labels
     train_step = TRAIN_STEPPERS[config["model"]]

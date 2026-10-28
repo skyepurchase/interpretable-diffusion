@@ -1,9 +1,20 @@
 dataset: burgers
 dataset_config:
   dir: ./data/burgers
-  system: ""
+  system: diffusion # the physics model of the PAID denoiser; generation uses burgers
   batch_size: 32
-  retain_dim: True
+  retain_dim: true
+  length: 1.0
+  time: 0.1
+  x_grid: 128
+  t_grid: 128
+  phys_param_ranges:
+    - [0.001, 0.01]
+  seed: 169800
+  n_samples: 3000
+  test_split: 1000
+  validation_split: 500
+  train_split: 1000
 
 model: paid
 model_config:
@@ -15,16 +26,11 @@ model_config:
     attention_resolutions: []
     num_heads: 1
     activation: swish
-    dropout: True
+    dropout: true
     dropout_rate: 0.1
 
   pde:
-    system: diffusion
-    time_dim: 128
     integral_level: 1
-    timestep: 0.00078125
-    spatial_length: 1.
-    num_grid_points: 128
     solver: euler
 
     phys_param_ranges:
@@ -35,19 +41,19 @@ model_config:
       in_features: -1
       features: 32
       act: swish
-      dropout: True
+      dropout: true
       dropout_rate: 0.1
     - latent_dim: 2
       in_features: -1
       features: 32
       act: swish
-      dropout: True
+      dropout: true
       dropout_rate: 0.1
 
   unmixer:
     dims: [64, 64]
     act: swish
-    dropout: True
+    dropout: true
     dropout_rate: 0.1
 
   phys_funcs:
@@ -55,7 +61,7 @@ model_config:
       in_features: -1
       features: 32
       act: swish
-      dropout: True
+      dropout: true
       dropout_rate: 0.1
 
   pre_funcs:
@@ -68,7 +74,7 @@ model_config:
       in_features: -1
       features: 32
       act: swish
-      dropout: True
+      dropout: true
       dropout_rate: 0.1
 
   num_timesteps: 1000

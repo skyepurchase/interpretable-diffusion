@@ -3,6 +3,19 @@ dataset_config:
   dir: ./data/pivae
   system: diffusion
   batch_size: 200
+  retain_dim: true
+  length: 2.0
+  time: 1.0
+  x_grid: 12
+  t_grid: 50
+  phys_param_ranges:
+    - [0.01, 0.1]
+    - [0.01, 0.1]
+  seed: 169800
+  n_samples: 3000
+  test_split: 1000
+  validation_split: 500
+  train_split: 1000
 
 model: phys_vae
 model_config:
@@ -15,7 +28,7 @@ model_config:
       latent_dim: -1 # Unnecessary
       dims: [256, 256]
       act: elu
-      residual: False
+      residual: false
     phys_funcs:
       - latent_dim: 1
         dims: [256, 256, 256, 64, 32]
@@ -32,21 +45,17 @@ model_config:
   phys_param_ranges:
     - [0.01, 0.1]
 
-  system: diffusion
-  time_dim: 50
   integral_level: 1
-  timestep: 0.05
-  length: 2.0
-  num_grid_points: 12
   ode_solver: euler
 
-  alpha: 0.1
-  beta: 0.01
-  gamma: 1
+  kl_balance: 1.0
+  alpha: 1.0e-1
+  beta: 1.0e-2
+  gamma: 1.0
 
 trainer_config:
-  learning_rate: 1e-3
-  eps: 1e-3
+  learning_rate: 1.0e-3
+  eps: 1.0e-3
   epochs: 100
 
 checkpoint_dir: checkpoints/diffusion_vae
