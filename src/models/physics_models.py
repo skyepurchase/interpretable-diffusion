@@ -9,7 +9,9 @@ from jaxtyping import PyTree
 Operator = Callable[[RealScalarLike, PyTree, PyTree], PyTree]
 
 
-def pendulum_model(_t: RealScalarLike, y: jax.Array, phys_params: jax.Array) -> jax.Array:
+def pendulum_model(
+    _t: RealScalarLike, y: jax.Array, phys_params: jax.Array
+) -> jax.Array:
     """
     Calculate the simple harmonic oscillator ODE.
     d2y_dt2 + omega*sin(y) = 0

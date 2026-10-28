@@ -53,9 +53,7 @@ LOSS_LABELS: dict[str, list[str]] = {
 PHYSICS_MODELS = {"phys_vae", "paid"}
 
 
-def make_model(
-    name: str, cfg: dict, dataset_config: dict, rngs: Rngs
-) -> nnx.Module:
+def make_model(name: str, cfg: dict, dataset_config: dict, rngs: Rngs) -> nnx.Module:
     """Build a model from its configuration.
 
     Physics models (phys_vae, paid) additionally receive the PDE system

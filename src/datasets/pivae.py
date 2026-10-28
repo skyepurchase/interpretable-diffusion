@@ -153,7 +153,14 @@ def generate_pendulum_data(
 
     # sol : (T, B, X)
     sol = diffeqsolve(
-        ODETerm(ode), Euler(), t0=0, t1=time, dt0=dt, y0=y, args=args, saveat=SaveAt(ts=t)
+        ODETerm(ode),
+        Euler(),
+        t0=0,
+        t1=time,
+        dt0=dt,
+        y0=y,
+        args=args,
+        saveat=SaveAt(ts=t),
     ).ys
     if sol is None:
         raise RuntimeError("ODE solution returned None")
@@ -269,7 +276,14 @@ def generate_diffusion_data(
     ode = diffusion_PDE(ds)
 
     sol = diffeqsolve(
-        ODETerm(ode), Euler(), t0=0, t1=time, dt0=dt, y0=y, args=args, saveat=SaveAt(ts=t)
+        ODETerm(ode),
+        Euler(),
+        t0=0,
+        t1=time,
+        dt0=dt,
+        y0=y,
+        args=args,
+        saveat=SaveAt(ts=t),
     ).ys
 
     if sol is None:
