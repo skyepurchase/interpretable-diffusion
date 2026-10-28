@@ -284,7 +284,7 @@ class PhysDecoder(nnx.Module):
 
         Returns
         -------
-        series : Distribution (m, B, T)
+        series : Distribution (m, B, T, L)
             The statistics for the series with the mean and log variance stacked in the first axis
         """
 
@@ -387,9 +387,10 @@ class PhysDecoder(nnx.Module):
                 x_means, selections
             )
 
+        m, n = x_means.shape[0], x_means.shape[1]
         return (
-            x_means.reshape(-1, self.t_grid, self.x_grid),
-            jnp.ones((x_means.shape[0], self.t_grid, self.x_grid)) * self.x_log_sigma,
+            x_means.reshape(m, n, self.t_grid, self.x_grid),
+            jnp.ones((m, n, self.t_grid, self.x_grid)) * self.x_log_sigma,
         )
 
     def __call__(
@@ -713,8 +714,7 @@ class PhysVAE(nnx.Module):
             key, sample_key = jax.random.split(key, 2)
 
             samples = stat[0] + (
-                jax.random.normal(sample_key, stat[0].shape)
-                * jnp.exp(0.5 * stat[1])
+                jax.random.normal(sample_key, stat[0].shape) * jnp.exp(0.5 * stat[1])
             )
 
             scaled_param = jnp.clip(samples, param_range[0], param_range[1])
@@ -726,8 +726,7 @@ class PhysVAE(nnx.Module):
             key, sample_key = jax.random.split(key, 2)
             aux_latents.append(
                 stat[0]
-                + jax.random.normal(sample_key, stat[0].shape)
-                * jnp.exp(0.5 * stat[1])
+                + jax.random.normal(sample_key, stat[0].shape) * jnp.exp(0.5 * stat[1])
             )
 
         return phys_latents, aux_latents
