@@ -21,6 +21,17 @@ dataset_config:
 
 model: paid
 model_config:
+  unet:
+    in_channels: 1
+    ch: 32
+    ch_mult: [1, 2, 2]
+    num_res_blocks: 1
+    attention_resolutions: [2]
+    num_heads: 4
+    activation: swish
+    dropout: true
+    dropout_rate: 0.1
+
   pde:
     integral_level: 1.0
     solver: euler
@@ -30,20 +41,31 @@ model_config:
 
   aux_funcs:
     - latent_dim: 1
-      dims: [32, 32]
+      in_features: -1
+      features: 32
       act: swish
+      dropout: true
+      dropout_rate: 0.1
     - latent_dim: 2
-      dims: [32, 32]
+      in_features: -1
+      features: 32
       act: swish
+      dropout: true
+      dropout_rate: 0.1
 
   unmixer:
     dims: [64, 64]
     act: swish
+    dropout: true
+    dropout_rate: 0.1
 
   phys_funcs:
     - latent_dim: 1
-      dims: [32, 32]
+      in_features: -1
+      features: 32
       act: swish
+      dropout: true
+      dropout_rate: 0.1
 
   pre_funcs:
     - latent_dim: 1
@@ -52,8 +74,11 @@ model_config:
 
   post_funcs:
     - latent_dim: 1
-      dims: [32, 32]
+      in_features: -1
+      features: 32
       act: swish
+      dropout: true
+      dropout_rate: 0.1
 
   num_timesteps: 1000
   beta_schedule: linear
