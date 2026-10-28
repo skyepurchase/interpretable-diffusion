@@ -143,6 +143,19 @@ ELBO target & $x_{PAB}$ (physics + all auxiliary) & \code{x\_stat[0][-1]} (last 
 \end{tabularx}
 \end{table}
 
+\noindent\textbf{Naming erratum.} The table above follows the \emph{original
+repository's} flag naming (\code{advdif\_train.sh}), in which the variable
+\code{beta}$\,=10^6$ feeds the data-augmentation weight and
+\code{gamma}$\,=10^{-2}$ the unmixing weight. The paper's supplemental
+(Appendix E.3) uses the opposite convention for these two names: $\beta = 10^{-2}$
+weights the unmixing regularizer $R_{\mathrm{DA},1}$, and $\gamma = 10^{6}$ weights
+the physics-based data-augmentation regularizer $R_{\mathrm{DA},2}$
+($\alpha = 10^{-1}$ for $R_\mathrm{ppc}$ is named the same way in both). The
+reimplementation already uses the \emph{paper's} naming
+(\code{phys\_loss = beta * ...}, \code{data\_aug\_loss = gamma * ...},
+\code{disc\_loss = alpha * ...}); diagnosis D3 therefore refers to the
+reimplementation's \code{gamma} (configured as 1, should be $10^6$).
+
 \section{Training protocol}
 \label{sec:protocol}
 
