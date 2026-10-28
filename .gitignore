@@ -12,3 +12,6 @@ checkpoints/
 # Notebooks
 *.ipynb
 .ipynb_checkpoints/
+
+# Local agent plans (never committed)
+PLAN.md

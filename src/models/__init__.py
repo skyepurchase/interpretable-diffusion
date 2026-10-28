@@ -5,12 +5,9 @@ import orbax.checkpoint as ocp
 from flax import nnx
 from flax.nnx import Rngs
 
-from models.new_paid import NewPaid
 from models.paid import PAID
 from models.phys_vae import PhysVAE
 from models.train_ddim import train_step as ddim_step
-from models.train_new_paid import pretrain_step as new_paid_pretrain_step
-from models.train_new_paid import train_step as new_paid_step
 from models.train_paid import train_step as paid_step
 from models.train_phys_vae import train_step as phys_vae_step
 from models.train_vae import train_step as vae_step
@@ -23,7 +20,6 @@ MODELS = {
     "ddim": DDIM,
     "phys_vae": PhysVAE,
     "paid": PAID,
-    "new_paid": NewPaid,
 }
 
 TRAIN_STEPPERS: dict = {
@@ -31,11 +27,6 @@ TRAIN_STEPPERS: dict = {
     "vae": vae_step,
     "phys_vae": phys_vae_step,
     "paid": paid_step,
-    "new_paid": new_paid_step,
-}
-
-PRETRAIN_STEPPERS: dict = {
-    "new_paid": new_paid_pretrain_step,
 }
 
 LOSS_LABELS: dict[str, list[str]] = {
@@ -55,12 +46,6 @@ LOSS_LABELS: dict[str, list[str]] = {
         "physics",
         "discrepancy",
         "augmentation",
-    ],
-    "new_paid": [
-        "loss",
-        "reconstruction",
-        "physics",
-        "augmenter",
     ],
 }
 
