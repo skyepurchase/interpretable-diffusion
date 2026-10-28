@@ -173,8 +173,8 @@ class PhysDecoder(nnx.Module):
         The underlying physical system
     time_dim : int
         The time dimension, equivalently the number of timesteps
-    t1 : int
-        The final timestep of the simulation
+    t1 : float
+        The final time of the simulation
     dt : float
         The length of the timestep
     L : float
@@ -196,7 +196,7 @@ class PhysDecoder(nnx.Module):
         pre_funcs: list[dict],
         post_funcs: list[dict],
         system: str,
-        t1: int,
+        t1: float,
         dt: float,
         L: float,
         time_dim: int,
@@ -212,6 +212,7 @@ class PhysDecoder(nnx.Module):
         self.t1 = t1
         self.dt = dt
         self.integral_level = integral_level
+        self.integral_len = (time_dim - 1) * integral_level + 1
         self.t_span = t_span
         self.x_grid = num_grid_points
         _, _, self.num_derivatives = get_physics_model(system)
@@ -355,7 +356,7 @@ class PhysDecoder(nnx.Module):
         assert y_seq is not None, "Failed to solve ODE"
 
         # trim_y_seq : (T, B*n, L*D)
-        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
+        trim_y_seq = y_seq[jnp.arange(0, self.integral_len, self.integral_level)]
 
         # trim_ys : (T, n, B, L*D)
         trim_ys = jnp.reshape(
@@ -466,7 +467,7 @@ class PhysDecoder(nnx.Module):
         assert y_seq is not None, "Failed to solve ODE"
 
         # trim_y_seq : (T, B, L*D)
-        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
+        trim_y_seq = y_seq[jnp.arange(0, self.integral_len, self.integral_level)]
 
         # x_mean : (B, T, L)
         x_mean = jnp.permute_dims(trim_y_seq[:, :, : self.x_grid], (1, 0, 2))
@@ -570,6 +571,9 @@ class PhysVAE(nnx.Module):
         self.t_span = jnp.linspace(
             0.0, self.integral_step * (self.integral_len - 1), self.integral_len
         )
+        # Static final integration time (kept as a Python float so it stays
+        # concrete under jit, unlike the traced t_span array)
+        self.t_final = float(self.t_span[-1])
         self.num_grid_points = x_grid
         _, num_phys_params, num_derivatives = get_physics_model(system)
         self.ode_dim = self.num_grid_points * num_derivatives
@@ -584,7 +588,7 @@ class PhysVAE(nnx.Module):
         )
         self.decode = PhysDecoder(
             **decoder,
-            t1=self.integral_len,
+            t1=self.t_final,
             dt=self.integral_step,
             L=length,
             time_dim=t_grid,
@@ -612,7 +616,7 @@ class PhysVAE(nnx.Module):
         """Reconstruct the input"""
         phys_stats, aux_stats, _ = self.encode(x)
         phys_latents, aux_latents = self.sample_latents(phys_stats, aux_stats, key)
-        init_y = x[:, : self.num_grid_points]
+        init_y = x[:, 0].reshape(-1, self.num_grid_points)
 
         return self.decode(phys_latents, aux_latents, init_y)[0], phys_latents[0]
 
@@ -674,7 +678,7 @@ class PhysVAE(nnx.Module):
             ODETerm(self.decode.physics_model),
             self.decode.solver(),
             t0=0.0,
-            t1=self.integral_len,
+            t1=self.t_final,
             dt0=self.integral_step,
             y0=init_cond,
             args=params,
