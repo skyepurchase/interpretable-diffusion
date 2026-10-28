@@ -156,7 +156,7 @@ def diffusion_PDE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTre
             f"Expected y and args to have the same batch size, {y.shape[0]} != {args.shape[0]}"
         )
 
-        a, b = jnp.split(args, 2, axis=-1)
+        diff_coeff, adv_coeff = jnp.split(args, 2, axis=-1)
 
         dy_ds = jnp.gradient(y, ds, axis=1)
         assert not isinstance(dy_ds, list)
@@ -164,7 +164,7 @@ def diffusion_PDE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTre
         d2y_ds2 = jnp.gradient(dy_ds, ds, axis=1)
         assert not isinstance(d2y_ds2, list)
 
-        dy_dt = a * d2y_ds2 - b * dy_ds
+        dy_dt = diff_coeff * d2y_ds2 - adv_coeff * dy_ds
 
         return jnp.pad(dy_dt[:, 1:-1], ((0, 0), (1, 1)), constant_values=0)
 
@@ -192,8 +192,11 @@ def generate_diffusion_data(
 
     Returns
     -------
-    samples : (B,T,2)
-        B samples with T timesteps including both the timestep and the pendulum angle.
+    samples : (B, X, T)
+        B samples with X spatial grid points and T timesteps, following the
+        diffusion-advection PDE with per-sample diff_coeff and adv_coeff.
+    diff_coeff : (B, 1)
+        The diffusion coefficient of each sample.
     """
     t = jnp.linspace(0, T, t_grid)
     dt = t[1] - t[0]
@@ -201,15 +204,19 @@ def generate_diffusion_data(
     s = jnp.linspace(0, X, x_grid)
     ds = s[1] - s[0]
 
-    init_key, a_key, b_key, key = jax.random.split(key, num=4)
+    init_key, diff_coeff_key, adv_coeff_key, key = jax.random.split(key, num=4)
 
     c = jax.random.uniform(init_key, (n_samples, 1), minval=0.5, maxval=1.5)
     y = c * jnp.sin(jnp.pi * s / s.max())
 
-    a = jax.random.uniform(a_key, (n_samples, 1), minval=0.01, maxval=0.1)
-    b = jax.random.uniform(b_key, (n_samples, 1), minval=0.01, maxval=0.1)
+    diff_coeff = jax.random.uniform(
+        diff_coeff_key, (n_samples, 1), minval=0.01, maxval=0.1
+    )
+    adv_coeff = jax.random.uniform(
+        adv_coeff_key, (n_samples, 1), minval=0.01, maxval=0.1
+    )
 
-    args = jnp.concatenate([a, b], axis=-1)
+    args = jnp.concatenate([diff_coeff, adv_coeff], axis=-1)
 
     ode = diffusion_PDE(ds)
 
@@ -224,7 +231,7 @@ def generate_diffusion_data(
 
     return jnp.permute_dims(sol, (1, 2, 0)) + 1e-3 * jax.random.normal(
         noise_key, (n_samples, x_grid, t_grid)
-    ), a
+    ), diff_coeff
 
 
 def burgers_ODE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]:

@@ -498,8 +498,21 @@ class PhysVAE(nnx.Module):
     ----------
     cfg : PhysVAEConfig
         The config for the network including the encoder and decoder
+    alpha : float
+        Weight of R_ppc, the least-action-principle regularizer (the discrepancy
+        loss over auxiliary-function combinations). Paper advdif value: 1e-1.
+    beta : float
+        Weight of R_DA,1, the unmixing regularizer (encoder's physics-only
+        estimate vs the decoder's physics-only generation). Paper advdif value:
+        1e-2. Note the original phys-vae repository's advdif_train.sh uses the
+        names beta/gamma swapped relative to the paper for these two weights.
+    gamma : float
+        Weight of R_DA,2, the physics-based data augmentation regularizer.
+        Paper advdif value: 1e6.
     rngs : nnx.Rngs
         The model RNGs
+
+    The weight naming follows Takeishi & Kalousis (NeurIPS 2021), Appendix E.3.
     """
 
     def __init__(

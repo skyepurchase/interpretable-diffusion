@@ -239,15 +239,19 @@ def loss_fn(
 
     # Physics latent grounding
     # first entry in x_stat is the physics only generation
+    # beta: weight of R_DA,1, the unmixing regularizer (paper advdif value 1e-2)
     phys_loss = model.beta * physics_only_loss(phys_only, x_stat[0][0])
 
     # Decoder grounding
+    # gamma: weight of R_DA,2, the physics-based data augmentation regularizer
+    # (paper advdif value 1e6)
     key, aug_key = jax.random.split(key, 2)
     data_aug_loss = model.gamma * augmentation_loss(
         model, phys_latents, init_y, aug_key
     )
 
     # Discrepancy loss
+    # alpha: weight of R_ppc, the least-action regularizer (paper advdif value 1e-1)
     disc_loss = model.alpha * discrepancy_loss(x_stat, model.mask)
 
     full_loss = rec_err + balance_kldiv + disc_loss + phys_loss + data_aug_loss
