@@ -50,34 +50,11 @@ LOSS_LABELS: dict[str, list[str]] = {
 }
 
 
-PHYSICS_MODELS = {"phys_vae", "paid"}
-
-
-def make_model(name: str, cfg: dict, dataset_config: dict, rngs: Rngs) -> nnx.Module:
-    """Build a model from its configuration.
-
-    Physics models (phys_vae, paid) additionally receive the PDE system
-    definition shared with data generation from dataset_config: system,
-    length, time, x_grid, and t_grid.
-    """
-    if name in PHYSICS_MODELS:
-        return MODELS[name](
-            **cfg,
-            system=dataset_config["system"],
-            length=dataset_config["length"],
-            time=dataset_config["time"],
-            x_grid=dataset_config["x_grid"],
-            t_grid=dataset_config["t_grid"],
-            rngs=rngs,
-        )
-    return MODELS[name](**cfg, rngs=rngs)
-
-
 def load_model(
     name: str, cfg: dict, dataset_config: dict, checkpoint, rngs: Rngs
 ) -> nnx.Module:
     """Load model (specified by the config) from a specific checkpoint"""
-    model = make_model(name, cfg, dataset_config, rngs)
+    model = MODELS[name](**cfg, dataset_config=dataset_config, rngs=rngs)
     graph, state = nnx.split(model)
 
     checkpointer = ocp.StandardCheckpointer()

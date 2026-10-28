@@ -504,16 +504,9 @@ class PhysVAE(nnx.Module):
     phys_param_ranges : list of (min, max) pairs
         The model's prior/augmentation ranges over the physics parameters
         (user-specified; distinct from the generation ranges in dataset_config)
-    system : str
-        The physical system, shared with the dataset
-    length : float
-        The spatial extent of the domain, shared with the dataset
-    time : float
-        The temporal extent of the data, shared with the dataset
-    x_grid : int
-        The number of spatial grid points, shared with the dataset
-    t_grid : int
-        The number of timesteps, shared with the dataset
+    dataset_config : dict
+        The dataset configuration; the PDE system definition (system, length,
+        time, x_grid, t_grid) is extracted from it
     integral_level : int
         The solver substeps per output frame
     ode_solver : str
@@ -521,24 +514,17 @@ class PhysVAE(nnx.Module):
     kl_balance : float
         The weight of the KL divergence relative to the reconstruction
     alpha : float
-        Weight of R_ppc, the least-action-principle regularizer (the discrepancy
-        loss over auxiliary-function combinations). Paper advdif value: 1e-1.
+        Weight of the least-action (discrepancy) regularizer
     beta : float
-        Weight of R_DA,1, the unmixing regularizer (encoder's physics-only
-        estimate vs the decoder's physics-only generation). Paper advdif value:
-        1e-2. Note the original phys-vae repository's advdif_train.sh uses the
-        names beta/gamma swapped relative to the paper for these two weights.
+        Weight of the unmixing regularizer
     gamma : float
-        Weight of R_DA,2, the physics-based data augmentation regularizer.
-        Paper advdif value: 1e6.
+        Weight of the physics data augmentation regularizer
     rngs : nnx.Rngs
         The model RNGs
 
     The data is generated on an even x_grid x t_grid discretisation of a
     length x time domain (dataset_config is the single source of truth), so
     the frame steps ds and dt are derived here rather than configured.
-
-    The weight naming follows Takeishi & Kalousis (NeurIPS 2021), Appendix E.3.
     """
 
     def __init__(
@@ -546,20 +532,22 @@ class PhysVAE(nnx.Module):
         encoder: dict,
         decoder: dict,
         phys_param_ranges: list[tuple[float, float]],
-        system: str,
-        length: float,
-        time: float,
-        x_grid: int,
-        t_grid: int,
         integral_level: int,
         ode_solver: str,
         kl_balance: float,
         alpha: float,
         beta: float,
         gamma: float,
+        dataset_config: dict,
         *,
         rngs: nnx.Rngs,
     ) -> None:
+        system = dataset_config["system"]
+        length = dataset_config["length"]
+        time = dataset_config["time"]
+        x_grid = dataset_config["x_grid"]
+        t_grid = dataset_config["t_grid"]
+
         self.integral_level = integral_level
 
         # The data's frame step follows from the dataset definition

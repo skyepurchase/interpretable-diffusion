@@ -137,6 +137,7 @@ class VAE(nnx.Module):
         output_shape: int = 28,
         eps: float = 1e-6,
         img_gen: bool = True,
+        dataset_config: dict | None = None,
         *,
         rngs: nnx.Rngs,
     ) -> None:

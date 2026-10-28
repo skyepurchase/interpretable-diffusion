@@ -57,6 +57,7 @@ class DDIM(nnx.Module):
         beta_start: float = 1e-4,
         beta_end: float = 0.02,
         pad: list[tuple] = [(0, 0), (0, 0)],
+        dataset_config: dict | None = None,
         *,
         rngs: nnx.Rngs,
     ) -> None:

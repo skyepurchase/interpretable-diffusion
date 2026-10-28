@@ -446,16 +446,17 @@ class PAID(nnx.Module):
         disc_reg: float,
         phys_reg: float,
         aug_reg: float,
-        system: str,
-        length: float,
-        time: float,
-        x_grid: int,
-        t_grid: int,
+        dataset_config: dict,
         condition: int = 5,
         pad: list[tuple] = [(0, 0), (0, 0)],
         *,
         rngs: nnx.Rngs,
     ) -> None:
+        system = dataset_config["system"]
+        length = dataset_config["length"]
+        time = dataset_config["time"]
+        x_grid = dataset_config["x_grid"]
+        t_grid = dataset_config["t_grid"]
         # Diffusion constants
         self.num_timesteps = num_timesteps
         self.betas = compute_betas(
