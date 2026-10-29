@@ -205,6 +205,7 @@ class PhysDecoder(nnx.Module):
         t_span: jax.Array,
         ode_solver: str,
         x_log_sigma: float = 0.01,
+        map: str = "identity",
         *,
         rngs: nnx.Rngs,
     ) -> None:
@@ -221,6 +222,15 @@ class PhysDecoder(nnx.Module):
         self.ode_dim = self.x_grid * self.num_derivatives
 
         self.x_log_sigma = x_log_sigma
+
+        # Out-ODE readout map g: applied to the generated series identically
+        # for every combination (ungated readout, never policed by the
+        # discrepancy regulariser). "linear" acts across the snapshot
+        # dimension only (x_grid -> x_grid per frame, no time mixing).
+        assert map in ("identity", "linear"), f"Unknown out-ODE map: {map}"
+        self.out_map = (
+            nnx.Linear(self.x_grid, self.x_grid, rngs=rngs) if map == "linear" else None
+        )
 
         self.num_pre_funcs = len(pre_funcs)
         self.num_post_funcs = len(post_funcs)
@@ -377,6 +387,10 @@ class PhysDecoder(nnx.Module):
         )
         # trim_y : (n, B, T, L)
         trim_y = jnp.permute_dims(trim_ys[:, :, :, : self.x_grid], (1, 2, 0, 3))
+        # Ungated readout: the map acts on the snapshot axis (last) of every
+        # frame, identically for all combinations
+        if self.out_map is not None:
+            trim_y = self.out_map(trim_y)
         # x_mean : (n, B, L*T)
         x_mean = jnp.reshape(trim_y, (self.pre_combs, -1, self.data_dim))
         # x_means : (m, B, L*T)
@@ -393,7 +407,7 @@ class PhysDecoder(nnx.Module):
         ):
             # x_mean : (B, L*T), apply : (1,)
             def apply_func(x_mean, apply):
-                return (1 - apply) * x_mean + apply * jnp.pad(
+                return x_mean + apply * jnp.pad(
                     post_func(jnp.concatenate([z_aux, x_mean], axis=1)),
                     ((0, 0), (self.x_grid, 0)),
                     mode="empty",
@@ -489,6 +503,10 @@ class PhysDecoder(nnx.Module):
 
         # x_mean : (B, T, L)
         x_mean = jnp.permute_dims(trim_y_seq[:, :, : self.x_grid], (1, 0, 2))
+        # Ungated readout: the map acts on the snapshot axis (last) of every
+        # frame
+        if self.out_map is not None:
+            x_mean = self.out_map(x_mean)
         # x_means : (B, L*T)
         x_means = jnp.reshape(x_mean, (-1, self.data_dim))
 
