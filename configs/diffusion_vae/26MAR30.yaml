@@ -6,7 +6,7 @@ dataset_config:
   retain_dim: true
   length: 2.0
   time: 1.0
-  x_grid: 12
+  x_grid: 20
   t_grid: 50
   phys_param_ranges:
     - [0.01, 0.1]
@@ -39,24 +39,24 @@ model_config:
         dims: [64, 64]
         act: elu
     post_funcs: []
-    x_log_sigma: 0.01
+    x_log_sigma: -13.8
 
   phys_param_ranges:
-    - [0.01, 0.1]
+    - [0.005, 0.2]
 
-  integral_level: 1
+  integral_level: 2
   ode_solver: euler
 
   kl_balance: 1.0
   alpha: 1.0e-1
   beta: 1.0e-2
-  gamma: 1.0
+  gamma: 1.0e6
 
 trainer_config:
   learning_rate: 1.0e-3
   eps: 1.0e-3
   weight_decay: 1.0e-6
   grad_clip: 5.0
-  epochs: 100
+  epochs: 20000
 
 checkpoint_dir: checkpoints/diffusion_vae
