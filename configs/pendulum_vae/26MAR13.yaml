@@ -58,6 +58,8 @@ model_config:
 trainer_config:
   learning_rate: 1.0e-3
   eps: 1.0e-3
+  weight_decay: 1.0e-6
+  grad_clip: 5.0
   epochs: 5000
 
 checkpoint_dir: checkpoints/pendulum_vae

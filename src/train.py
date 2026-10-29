@@ -88,9 +88,20 @@ def train(
     epochs = config["trainer_config"]["epochs"]
     learning_rate = config["trainer_config"]["learning_rate"]
     eps = config["trainer_config"].get("eps", 1e-8)
+    weight_decay = config["trainer_config"].get("weight_decay", 0.0)
+    grad_clip = config["trainer_config"].get("grad_clip", None)
 
-    # Setup optimizer
-    optimizer = nnx.Optimizer(model, optax.adam(learning_rate, eps=eps), wrt=nnx.Param)
+    # Setup optimizer; add_decayed_weights matches torch Adam's L2 weight decay
+    gradient_transform = optax.chain(
+        optax.add_decayed_weights(weight_decay),
+        optax.adam(learning_rate, eps=eps),
+    )
+    if grad_clip is not None:
+        gradient_transform = optax.chain(
+            optax.clip(grad_clip),
+            gradient_transform,
+        )
+    optimizer = nnx.Optimizer(model, gradient_transform, wrt=nnx.Param)
 
     # Training loop
     final_loss = 0.0
