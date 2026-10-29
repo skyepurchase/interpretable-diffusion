@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from flax import nnx
+
 from jax.scipy.stats import bernoulli, norm
 
 from models.vae import VAE
@@ -33,7 +33,7 @@ def output_logpmf(dist: str, p_x: jax.Array, x: jax.Array) -> jax.Array:
         raise NotImplementedError(f"{dist} distribution not implemented.")
 
 
-def ELBO_loss(model: VAE, x: jax.Array, key: jax.Array) -> jax.Array:
+def vae_loss(model: VAE, x: jax.Array, key: jax.Array) -> tuple[jax.Array, jax.Array]:
     """
     Calculates the ELBO for a given model and datapoint.
 
@@ -74,38 +74,5 @@ def ELBO_loss(model: VAE, x: jax.Array, key: jax.Array) -> jax.Array:
     assert log_likelihood.shape == x.shape, f"{log_likelihood.shape}"
 
     # Calculate negative ELBO
-    return -(log_prior.sum() + log_likelihood.sum() - log_posterior.sum())
-
-
-@nnx.jit
-def train_step(
-    model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
-) -> jax.Array:
-    """
-    Carry out a single VAE train step
-
-    Parameters
-    ----------
-    model : VAE
-        The model to train
-    data : Array
-        The datapoint
-    optimizer : Optimizer
-        The optimizer for the models parameters
-    key : Array
-        PRNG key
-    output_dist : str = bernoulli
-        The distribution to use for the output
-
-    Returns
-    -------
-    losses : Array
-        Loss data to be logged
-    """
-    if not isinstance(model, VAE):
-        raise TypeError(f"Expected model to be type VAE not {type(model)}")
-
-    loss, grads = nnx.value_and_grad(ELBO_loss)(model, data, key)
-    optimizer.update(model, grads)
-
-    return loss[None]
+    loss = -(log_prior.sum() + log_likelihood.sum() - log_posterior.sum())
+    return loss, loss[None]

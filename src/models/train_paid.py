@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import jax.random
-from flax import nnx
+
 from jax.random import split
 from jaxtyping import Array
 
@@ -94,7 +94,7 @@ def discrepancy_loss(x_hats: Array) -> Array:
     return masked_disc.sum() / mask.sum()
 
 
-def loss_fn(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
+def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
     """
     Container function for the separate losses that define the physics aligned interpretable diffusion training.
 
@@ -111,7 +111,15 @@ def loss_fn(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
     -------
     loss : Array ()
         The total loss of the model on the data
+    aux : Array (n)
+        The stacked sub-losses of the model on the data
     """
+    if not isinstance(model, PAID):
+        raise TypeError(f"Expected model type to be PAID not {type(model)}")
+
+    if len(data.shape) < 4:
+        data = jnp.expand_dims(data, -1)
+
     batch_size = data.shape[0]
 
     key, time_key, noise_key = split(key, num=3)
@@ -164,40 +172,3 @@ def loss_fn(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
     return full_loss, jnp.stack(
         [full_loss, reconstruction_loss, phys_loss, disc_loss, aug_loss]
     )
-
-
-@nnx.jit
-def train_step(
-    model: nnx.Module, data: Array, optimizer: nnx.Optimizer, key: Array
-) -> Array:
-    """
-    Carry out a single train step; randomly sample noise and time steps, calculate the model loss, perform gradient descent.
-
-    Parameters
-    ----------
-    model : PAID
-        The model to train
-    data : Array
-        The single data sample
-    optimizer : Optimizer
-        The optimizer with the model parameters
-    key : Array
-        PRNG key
-    epoch : int
-        The current epoch, used for logging
-
-    Returns
-    -------
-    losses : Array
-        Loss data to be logged
-    """
-    if not isinstance(model, PAID):
-        raise TypeError(f"Expected model type to be PAID not {type(model)}")
-
-    if len(data.shape) < 4:
-        data = jnp.expand_dims(data, -1)
-
-    (_, losses), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, data, key)
-    optimizer.update(model, grads)
-
-    return losses

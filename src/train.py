@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import DATASETS
-from models import LOSS_LABELS, MODELS, TRAIN_STEPPERS
+from models import LOSS_FNS, LOSS_LABELS, MODELS
 from utils import load_config
 
 
@@ -80,8 +80,8 @@ def train(
         rngs=rngs,
     )
 
-    # Get stepper and loss labels
-    train_step = TRAIN_STEPPERS[config["model"]]
+    # Get loss function and loss labels
+    loss_fn = LOSS_FNS[config["model"]]
     loss_labels = LOSS_LABELS[config["model"]]
 
     # Extract training parameters
@@ -102,6 +102,18 @@ def train(
             gradient_transform,
         )
     optimizer = nnx.Optimizer(model, gradient_transform, wrt=nnx.Param)
+
+    # Generic train step over the model's loss function; the validation step
+    # calls the loss directly so no gradients or optimizer updates occur
+    @nnx.jit
+    def train_step(
+        model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
+    ) -> jax.Array:
+        (_, losses), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, data, key)
+        optimizer.update(model, grads)
+        return losses
+
+    val_step = nnx.jit(loss_fn)
 
     # Training loop
     final_loss = 0.0
@@ -145,9 +157,7 @@ def train(
         )
         for batch, _ in val_pbar:
             key, val_key = split(key, num=2)
-            losses = train_step(
-                model=model, data=batch, optimizer=optimizer, key=val_key
-            )
+            losses = val_step(model=model, data=batch, key=val_key)[1]
 
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 

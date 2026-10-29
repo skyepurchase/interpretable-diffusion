@@ -7,10 +7,10 @@ from flax.nnx import Rngs
 
 from models.paid import PAID
 from models.phys_vae import PhysVAE
-from models.train_ddim import train_step as ddim_step
-from models.train_paid import train_step as paid_step
-from models.train_phys_vae import train_step as phys_vae_step
-from models.train_vae import train_step as vae_step
+from models.train_ddim import ddim_loss
+from models.train_paid import paid_loss
+from models.train_phys_vae import phys_vae_loss
+from models.train_vae import vae_loss
 
 from .ddim import DDIM
 from .vae import VAE
@@ -22,11 +22,11 @@ MODELS = {
     "paid": PAID,
 }
 
-TRAIN_STEPPERS: dict = {
-    "ddim": ddim_step,
-    "vae": vae_step,
-    "phys_vae": phys_vae_step,
-    "paid": paid_step,
+LOSS_FNS: dict = {
+    "ddim": ddim_loss,
+    "vae": vae_loss,
+    "phys_vae": phys_vae_loss,
+    "paid": paid_loss,
 }
 
 LOSS_LABELS: dict[str, list[str]] = {

@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-from flax import nnx
 
 from models.phys_vae import PhysVAE
 from utils import Distribution
@@ -196,7 +195,7 @@ def discrepancy_loss(x_stats: Distribution, mask: jax.Array) -> jax.Array:
     return masked_divs.sum() / mask.sum()
 
 
-def loss_fn(
+def phys_vae_loss(
     model: PhysVAE, data: jax.Array, key: jax.Array
 ) -> tuple[jax.Array, jax.Array]:
     """
@@ -255,35 +254,3 @@ def loss_fn(
     return full_loss, jnp.stack(
         [full_loss, rec_err, kldiv, disc_loss, phys_loss, data_aug_loss]
     )
-
-
-@nnx.jit
-def train_step(
-    model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
-) -> jax.Array:
-    """
-    Carry out a single VAE train step
-
-    Parameters
-    ----------
-    model : PhysVAE
-        The model to train
-    data : Array
-        The datapoint
-    optimizer : Optimizer
-        The optimizer for the models parameters
-    key : Array
-        PRNG key
-
-    Returns
-    -------
-    losses : Array
-        Loss data to be logged
-    """
-    if not isinstance(model, PhysVAE):
-        raise TypeError(f"Expected model to be type PhysVAE not {type(model)}")
-
-    (_, losses), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, data, key)
-    optimizer.update(model, grads)
-
-    return losses
