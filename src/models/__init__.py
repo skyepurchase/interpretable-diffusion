@@ -63,22 +63,32 @@ def load_model(
     return nnx.merge(graph, checkpoint_state)
 
 
-def save_model(model: nnx.Module, folder: str, stamp: str) -> None:
-    """Save the given model in the specified folder."""
+def save_model(
+    model: nnx.Module, folder: str, stamp: str | None = None
+) -> ocp.AsyncCheckpointer:
+    """
+    Save the given model in the specified folder.
+
+    With a stamp the model is saved to a stamped folder plus latest, without a
+    stamp only latest is saved. The returned checkpointer must be waited on by
+    the caller to guarantee the save completes.
+    """
     if not os.path.isdir(folder):
         os.makedirs(folder)
 
     _, state = nnx.split(model)
 
-    # Async used to verify the full save occurs
     checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
 
-    perm_path = os.path.join(os.getcwd(), folder, stamp)
-    if os.path.isdir(perm_path):
-        print(f"Unique stamp ({stamp}) already exists. Use a timestamp to avoid this.")
-        print("Skipping permanent saving.")
-    else:
-        checkpointer.save(perm_path, state)
+    if stamp is not None:
+        perm_path = os.path.join(os.getcwd(), folder, stamp)
+        if os.path.isdir(perm_path):
+            print(
+                f"Unique stamp ({stamp}) already exists. Use a timestamp to avoid this."
+            )
+            print("Skipping permanent saving.")
+        else:
+            checkpointer.save(perm_path, state)
 
     latest_path = os.path.join(os.getcwd(), folder, "latest")
     if os.path.isdir(latest_path):
@@ -86,4 +96,4 @@ def save_model(model: nnx.Module, folder: str, stamp: str) -> None:
 
     checkpointer.save(latest_path, state)
 
-    checkpointer.wait_until_finished()
+    return checkpointer

@@ -71,7 +71,7 @@ def main() -> None:
 
     # Save model
     print("\nSaving model...")
-    save_model(result.model, config["checkpoint_dir"], stamp)
+    save_model(result.model, config["checkpoint_dir"], stamp).wait_until_finished()
     print("Saved.")
 
     # Evaluate

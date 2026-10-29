@@ -1,3 +1,4 @@
+import os
 import time
 from argparse import ArgumentParser
 from collections import defaultdict
@@ -5,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import jax
+import orbax.checkpoint as ocp
 import optax
 import trackio
 from flax import nnx
@@ -13,7 +15,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import DATASETS
-from models import LOSS_FNS, LOSS_LABELS, MODELS
+from models import LOSS_FNS, LOSS_LABELS, MODELS, save_model
 from utils import load_config
 
 
@@ -115,6 +117,15 @@ def train(
 
     val_step = nnx.jit(loss_fn)
 
+    # Reconstruction loss is the first auxiliary entry for the physics models
+    # and the total loss itself for vae and ddim
+    val_rec_idx = 1 if config["model"] in ("phys_vae", "paid") else 0
+
+    # Best-validation checkpointing; the arena holds the async checkpointers
+    # of the val-checkpoint saves so they can be waited on before returning
+    val_ckpt_dir = os.path.join(config["checkpoint_dir"], "val-checkpoint")
+    checkpointers = []
+
     # Training loop
     final_loss = 0.0
     best_loss = float("inf")
@@ -162,16 +173,24 @@ def train(
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 
             running_loss["val_loss"] += losses[0].item() / len(val_loader)
+            running_loss["val_reconstruction"] += losses[val_rec_idx].item() / len(
+                val_loader
+            )
 
         model.train()
 
         # Log metrics per epoch (trackio is global singleton, assumed initialized by caller)
         trackio.log(running_loss)
 
-        curr_loss = running_loss["loss"]
-        if best_loss >= curr_loss:
-            best_loss = curr_loss
+        if best_loss >= running_loss["val_reconstruction"]:
+            best_loss = running_loss["val_reconstruction"]
             best_epoch = epoch
+
+            # Wait on in-flight saves before overwriting the latest folder
+            for checkpointer in checkpointers:
+                checkpointer.wait_until_finished()
+            checkpointers.clear()
+            checkpointers.append(save_model(model, val_ckpt_dir))
 
         if local:
             assert isinstance(pbar, tqdm)
@@ -183,6 +202,17 @@ def train(
 
     end = time.perf_counter()
     train_time = end - start
+
+    # Wait on the outstanding val-checkpoint saves and restore the best state
+    for checkpointer in checkpointers:
+        checkpointer.wait_until_finished()
+
+    graph, state = nnx.split(model)
+    checkpointer = ocp.StandardCheckpointer()
+    best_state = checkpointer.restore(
+        os.path.join(os.getcwd(), val_ckpt_dir, "latest"), state
+    )
+    model = nnx.merge(graph, best_state)
 
     return TrainResult(
         model=model,
