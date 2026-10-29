@@ -48,6 +48,7 @@ class PhysUNet2D(nnx.Module):
         physics_model: Operator,
         solver: Callable[[], AbstractSolver],
         rngs: nnx.Rngs,
+        embed_dim: int = 128,
     ):
         # Constants
         num_pre_funcs = len(pre_funcs)
@@ -66,7 +67,10 @@ class PhysUNet2D(nnx.Module):
         self.pde_dim = pde_dim
         self.time_dim = time_dim
         self.data_dim = num_grid_points * time_dim
-        self.embed_dim = self.data_dim  # Fiddle
+        # Diffusion step embedding width; decoupled from data_dim so the
+        # embedding MLP and head inputs stay small (and grids like burgers
+        # cannot silently explode the parameter count)
+        self.embed_dim = embed_dim
 
         self.physics_model = physics_model
         self.solver = solver
@@ -123,7 +127,9 @@ class PhysUNet2D(nnx.Module):
                     rngs=rngs,
                 ),
                 nnx.sigmoid,
-                lambda x: x * ((5 * max) - (min / 5)) + (min / 5),
+                # Rescale by the exact configured range; defaults bound so each
+                # closure captures its own (lo, hi) rather than the loop vars
+                lambda x, lo=min, hi=max: x * (hi - lo) + lo,
             )
             self.phys_funcs.append(phys_func)
 
@@ -242,7 +248,7 @@ class PhysUNet2D(nnx.Module):
             )
 
             pre_selections = jnp.ones((len(self.pre_funcs), 1))
-            post_selections = jnp.ones((len(self.pre_funcs), 1))
+            post_selections = jnp.ones((len(self.post_funcs), 1))
         else:
             assert (
                 pre_selections.shape == (len(self.pre_funcs), pre_combs)
@@ -254,7 +260,7 @@ class PhysUNet2D(nnx.Module):
                 post_selections.shape == (len(self.post_funcs), pre_combs * post_combs)
                 or len(self.post_funcs) == 0
             ), (
-                f"Shape of post_selections must match number of post-ODE functions and post_combinations, {post_selections.shape} != {(len(self.post_funcs), pre_combs * post_combs)} and {len(self.pre_funcs)} != 0."
+                f"Shape of post_selections must match number of post-ODE functions and post_combinations, {post_selections.shape} != {(len(self.post_funcs), pre_combs * post_combs)} and {len(self.post_funcs)} != 0."
             )
 
         def PDE(t: RealScalarLike, y: PyTree, args: PyTree):
@@ -329,7 +335,9 @@ class PhysUNet2D(nnx.Module):
         phys_x_hat = jnp.tile(phys_x_hat, [post_combs, 1, 1])
 
         for z_aux, post_func, selections in zip(
-            aux_latents[len(self.pre_funcs) : len(self.post_funcs)],
+            aux_latents[
+                len(self.pre_funcs) : len(self.pre_funcs) + len(self.post_funcs)
+            ],
             self.post_funcs,
             post_selections,
         ):
@@ -447,6 +455,7 @@ class PAID(nnx.Module):
         phys_reg: float,
         aug_reg: float,
         dataset_config: dict,
+        embed_dim: int = 128,
         condition: int = 5,
         pad: list[tuple] = [(0, 0), (0, 0)],
         *,
@@ -509,7 +518,8 @@ class PAID(nnx.Module):
             self.time_dim,
             self.physics_model,
             self.solver,
-            rngs,
+            embed_dim=embed_dim,
+            rngs=rngs,
         )
 
         # Additional constants

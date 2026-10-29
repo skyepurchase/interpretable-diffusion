@@ -55,6 +55,7 @@ model_config:
   aug_reg: 1.0e4
 
   condition: 10
+  embed_dim: 128
 
 trainer_config:
   learning_rate: 1.0e-3
