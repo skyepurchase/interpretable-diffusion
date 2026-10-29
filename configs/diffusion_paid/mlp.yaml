@@ -56,6 +56,7 @@ model_config:
 
   condition: 10
   embed_dim: 128
+  jump: 10
 
 trainer_config:
   learning_rate: 1.0e-3

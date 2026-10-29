@@ -457,6 +457,7 @@ class PAID(nnx.Module):
         dataset_config: dict,
         embed_dim: int = 128,
         condition: int = 5,
+        jump: int = 10,
         pad: list[tuple] = [(0, 0), (0, 0)],
         *,
         rngs: nnx.Rngs,
@@ -524,11 +525,100 @@ class PAID(nnx.Module):
 
         # Additional constants
         self.condition = condition
+        self.jump = jump
         self.phys_param_ranges = pde["phys_param_ranges"]
         self.pad = pad
 
-    def __call__(self, x: jax.Array, t: jax.Array) -> jax.Array:
-        return self.denoiser.forward(x, t)
+    def __call__(self, x: jax.Array, key: jax.Array) -> tuple[jax.Array, jax.Array]:
+        """
+        Sample the conditioned DDIM trajectory and estimate the physics
+        coefficient, mirroring the PhysVAE ``__call__(x, key)`` protocol.
+
+        The denoising diffusion sampling runs to completion over
+        ``ceil(num_timesteps / jump)`` DDIM steps: the denoiser predicts the
+        clean sample (mean estimation), the noise is implied by ``x_t`` and
+        ``x_0``, and the conditioned frames are carried clean at every step.
+        The coefficient is estimated from the final step of the trajectory:
+        the generated sample is noised back a single diffusion step and the
+        embedder's physics parameters are read off it (the unmixer is never
+        trained on the clean section, so the estimate comes from the
+        trajectory's own sample at ``tau = 1``).
+
+        Parameters
+        ----------
+        x : Array (B, T, X) or (B, T, X, 1)
+            Batched data; the first ``condition`` frames are the condition
+        key : PRNG
+            Random key for the initial noise and the coefficient re-noising
+
+        Returns
+        -------
+        x_0 : Array
+            The generated sample, channel axis dropped if the input was 3-D
+        coeff : Array (B, 1)
+            The estimated physics coefficient
+        """
+        expanded = x.ndim < 4
+        if expanded:
+            x = jnp.expand_dims(x, -1)
+
+        alphas = jnp.cumprod(1.0 - self.betas)
+
+        key, noise_key = jax.random.split(key)
+        # The conditioned frames are never noise; the rest starts pure noise
+        x_t = jnp.concatenate(
+            [
+                x[:, : self.condition],
+                jax.random.normal(noise_key, x.shape)[:, self.condition :],
+            ],
+            axis=1,
+        )
+
+        t_last = self.num_timesteps - 1
+        num_steps = -(-self.num_timesteps // self.jump)
+
+        def ddim_step(i: jax.Array, x_t: jax.Array) -> jax.Array:
+            t = t_last - i * self.jump
+            t_next = jnp.maximum(t - self.jump, 0)
+
+            tau = jnp.full((x.shape[0],), t, dtype="int32")
+            x_hat, _, _ = self.denoiser.full_forward(x_t, tau)
+            x_0 = x_hat[-1]
+
+            alpha_t = alphas[t]
+            alpha_next = alphas[t_next]
+
+            # DDIM with the noise implied by x_t and x_0 (deterministic)
+            eps = (x_t - x_0 * jnp.sqrt(alpha_t)) / jnp.sqrt(1.0 - alpha_t)
+            x_next = x_0 * jnp.sqrt(alpha_next) + eps * jnp.sqrt(1.0 - alpha_next)
+            x_next = jax.lax.cond(
+                t_next == 0,
+                lambda: x_0,
+                lambda: x_next,
+            )
+
+            # Conditioned frames stay clean throughout
+            return jnp.concatenate(
+                [x_t[:, : self.condition], x_next[:, self.condition :]], axis=1
+            )
+
+        x_0 = jax.lax.fori_loop(0, num_steps, ddim_step, x_t)
+
+        # Coefficient estimate: noise the sample back one step and read the
+        # embedder's physics parameters at tau = 1
+        key, noise_key = jax.random.split(key)
+        alpha_1 = alphas[1]
+        x_1 = x_0 * jnp.sqrt(alpha_1) + jax.random.normal(
+            noise_key, x_0.shape
+        ) * jnp.sqrt(1.0 - alpha_1)
+        tau = jnp.ones((x.shape[0],), dtype="int32")
+        _, phys_params, _ = self.denoiser._embed(x_1, tau)
+        coeff = phys_params[0]
+
+        if expanded:
+            x_0 = jnp.squeeze(x_0, axis=-1)
+
+        return x_0, coeff
 
     def generate_physics(self, params: list[jax.Array], init_y: jax.Array) -> jax.Array:
         """
