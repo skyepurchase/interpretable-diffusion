@@ -255,6 +255,19 @@ class PhysDecoder(nnx.Module):
         self.pre_selections, self.post_selections = gen_selections(
             self.num_pre_funcs, self.num_post_funcs
         )
+        # gen_selections returns placeholder rows for empty func lists, so
+        # only check the selection shapes when the func list is non-empty
+        if self.num_pre_funcs > 0:
+            assert self.pre_selections.shape == (self.num_pre_funcs, self.pre_combs), (
+                f"Pre selections must be (num_pre_funcs, pre_combs), {self.pre_selections.shape} != {(self.num_pre_funcs, self.pre_combs)}"
+            )
+        if self.num_post_funcs > 0:
+            assert self.post_selections.shape == (
+                self.num_post_funcs,
+                self.pre_combs * self.post_combs,
+            ), (
+                f"Post selections must be (num_post_funcs, pre_combs * post_combs), {self.post_selections.shape} != {(self.num_post_funcs, self.pre_combs * self.post_combs)}"
+            )
 
         if self.x_grid > 1:
             ds = L / (self.x_grid - 1)
@@ -369,8 +382,12 @@ class PhysDecoder(nnx.Module):
         # x_means : (m, B, L*T)
         x_means = jnp.tile(x_mean, reps=(self.post_combs, 1, 1))
 
+        assert len(latents) == self.num_pre_funcs + self.num_post_funcs, (
+            f"Expected one auxiliary latent per pre/post func, {len(latents)} != {self.num_pre_funcs} + {self.num_post_funcs}"
+        )
+
         for z_aux, post_func, selections in zip(
-            latents[len(self.pre_funcs) : len(self.post_funcs) + 1],
+            latents[len(self.pre_funcs) : len(self.pre_funcs) + len(self.post_funcs)],
             self.post_funcs,
             self.post_selections,
         ):
@@ -475,8 +492,12 @@ class PhysDecoder(nnx.Module):
         # x_means : (B, L*T)
         x_means = jnp.reshape(x_mean, (-1, self.data_dim))
 
+        assert len(latents) == self.num_pre_funcs + self.num_post_funcs, (
+            f"Expected one auxiliary latent per pre/post func, {len(latents)} != {self.num_pre_funcs} + {self.num_post_funcs}"
+        )
+
         for z_aux, post_func in zip(
-            latents[len(self.pre_funcs) : len(self.post_funcs) + 1],
+            latents[len(self.pre_funcs) : len(self.pre_funcs) + len(self.post_funcs)],
             self.post_funcs,
         ):
             # x_means : (B, L*T)
