@@ -104,6 +104,7 @@ def visualise(
     loaded_model = load_model(
         model,
         model_config,
+        dataset_config,
         os.path.join(os.getcwd(), checkpoint_dir, checkpoint),
         rngs=rngs,
     )

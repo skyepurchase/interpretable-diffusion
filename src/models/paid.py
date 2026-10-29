@@ -446,11 +446,17 @@ class PAID(nnx.Module):
         disc_reg: float,
         phys_reg: float,
         aug_reg: float,
+        dataset_config: dict,
         condition: int = 5,
         pad: list[tuple] = [(0, 0), (0, 0)],
         *,
         rngs: nnx.Rngs,
     ) -> None:
+        system = dataset_config["system"]
+        length = dataset_config["length"]
+        time = dataset_config["time"]
+        x_grid = dataset_config["x_grid"]
+        t_grid = dataset_config["t_grid"]
         # Diffusion constants
         self.num_timesteps = num_timesteps
         self.betas = compute_betas(
@@ -463,19 +469,23 @@ class PAID(nnx.Module):
         self.aug_reg = aug_reg
 
         # Physics constants + functions
+        # The PDE system is defined by dataset_config: the data is generated
+        # on an even x_grid x t_grid discretisation of a length x time domain,
+        # so the frame step is derived here rather than configured separately.
         self.integral_level = pde["integral_level"]
-        self.time_dim = pde["time_dim"]
+        self.time_dim = t_grid
 
-        self.dt = pde["timestep"] / float(self.integral_level)
+        frame_dt = time / float(t_grid - 1)
+        self.dt = frame_dt / float(self.integral_level)
         self.t1 = (self.time_dim - 1) * self.dt
         self.t_span = jnp.linspace(0.0, self.t1, self.time_dim)
 
-        self.num_grid_points = pde["num_grid_points"]
+        self.num_grid_points = x_grid
         ds = 0.0
         if self.num_grid_points > 1:
-            ds = pde["spatial_length"] / (self.num_grid_points - 1)
+            ds = length / (self.num_grid_points - 1)
 
-        physics_model, _, num_derivatives = get_physics_model(pde["system"])
+        physics_model, _, num_derivatives = get_physics_model(system)
         self.pde_dim = self.num_grid_points * num_derivatives
         self.physics_model = physics_model(jnp.array(ds), "periodic")
         self.solver = get_solver(pde["solver"])

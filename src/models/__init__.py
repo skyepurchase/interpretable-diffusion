@@ -5,15 +5,12 @@ import orbax.checkpoint as ocp
 from flax import nnx
 from flax.nnx import Rngs
 
-from models.new_paid import NewPaid
 from models.paid import PAID
 from models.phys_vae import PhysVAE
-from models.train_ddim import train_step as ddim_step
-from models.train_new_paid import pretrain_step as new_paid_pretrain_step
-from models.train_new_paid import train_step as new_paid_step
-from models.train_paid import train_step as paid_step
-from models.train_phys_vae import train_step as phys_vae_step
-from models.train_vae import train_step as vae_step
+from models.train_ddim import ddim_loss
+from models.train_paid import paid_loss
+from models.train_phys_vae import phys_vae_loss
+from models.train_vae import vae_loss
 
 from .ddim import DDIM
 from .vae import VAE
@@ -23,19 +20,13 @@ MODELS = {
     "ddim": DDIM,
     "phys_vae": PhysVAE,
     "paid": PAID,
-    "new_paid": NewPaid,
 }
 
-TRAIN_STEPPERS: dict = {
-    "ddim": ddim_step,
-    "vae": vae_step,
-    "phys_vae": phys_vae_step,
-    "paid": paid_step,
-    "new_paid": new_paid_step,
-}
-
-PRETRAIN_STEPPERS: dict = {
-    "new_paid": new_paid_pretrain_step,
+LOSS_FNS: dict = {
+    "ddim": ddim_loss,
+    "vae": vae_loss,
+    "phys_vae": phys_vae_loss,
+    "paid": paid_loss,
 }
 
 LOSS_LABELS: dict[str, list[str]] = {
@@ -56,18 +47,14 @@ LOSS_LABELS: dict[str, list[str]] = {
         "discrepancy",
         "augmentation",
     ],
-    "new_paid": [
-        "loss",
-        "reconstruction",
-        "physics",
-        "augmenter",
-    ],
 }
 
 
-def load_model(name: str, cfg, checkpoint, rngs: Rngs) -> nnx.Module:
+def load_model(
+    name: str, cfg: dict, dataset_config: dict, checkpoint, rngs: Rngs
+) -> nnx.Module:
     """Load model (specified by the config) from a specific checkpoint"""
-    model = MODELS[name](**cfg, rngs=rngs)
+    model = MODELS[name](**cfg, dataset_config=dataset_config, rngs=rngs)
     graph, state = nnx.split(model)
 
     checkpointer = ocp.StandardCheckpointer()

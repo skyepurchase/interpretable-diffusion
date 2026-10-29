@@ -9,7 +9,9 @@ from jaxtyping import PyTree
 Operator = Callable[[RealScalarLike, PyTree, PyTree], PyTree]
 
 
-def pendulum_model(_t: RealScalarLike, y: jax.Array, a_list: jax.Array) -> jax.Array:
+def pendulum_model(
+    _t: RealScalarLike, y: jax.Array, phys_params: jax.Array
+) -> jax.Array:
     """
     Calculate the simple harmonic oscillator ODE.
     d2y_dt2 + omega*sin(y) = 0
@@ -26,7 +28,7 @@ def pendulum_model(_t: RealScalarLike, y: jax.Array, a_list: jax.Array) -> jax.A
     dy : (B, 2)
         The output dynamics, dy and ddy
     """
-    omega = a_list[0]
+    omega = phys_params[0]
 
     theta, theta_dot = jnp.split(y, 2, axis=-1)
     dtheta_dot = -(omega**2 * jnp.sin(theta))
@@ -42,11 +44,11 @@ def make_diffusion_model(ds: jax.Array, boundary: str | float = 0.0) -> Operator
     )
 
     def diffusion_model(
-        _t: RealScalarLike, y: jax.Array, a_list: jax.Array
+        _t: RealScalarLike, y: jax.Array, phys_params: jax.Array
     ) -> jax.Array:
         """
         Calculate the simple diffusion ODE.
-        dy_dt - a*d2y_ds2 = 0
+        dy_dt - diff_coeff*d2y_ds2 = 0
 
         Parameters
         ----------
@@ -54,20 +56,21 @@ def make_diffusion_model(ds: jax.Array, boundary: str | float = 0.0) -> Operator
             The current timestep
         y : (B, L)
             The input dynamics, y
-        a_list : list[(B,)]
-            The known parameter of the diffusion system
+        phys_params : list[Array]
+            The physics parameters of the diffusion system; phys_params[0] is the
+            diffusion coefficient diff_coeff
 
         Returns
         -------
         dy : (B, L)
             The output dynamics, dy_dt
         """
-        a = a_list[0]
+        diff_coeff = phys_params[0]
         assert len(y.shape) == 2, (
             f"Expected y to have shape (B, L) but received {y.shape}."
         )
-        assert y.shape[0] == a.shape[0], (
-            f"Expected y and a to have the same batch, {y.shape[0]} != {a.shape[0]}."
+        assert y.shape[0] == diff_coeff.shape[0], (
+            f"Expected y and diff_coeff to have the same batch, {y.shape[0]} != {diff_coeff.shape[0]}."
         )
 
         if boundary == "periodic":
@@ -83,7 +86,7 @@ def make_diffusion_model(ds: jax.Array, boundary: str | float = 0.0) -> Operator
         assert not isinstance(d2y_ds2, list)
 
         # generate derivatives
-        dy_dt = a * d2y_ds2
+        dy_dt = diff_coeff * d2y_ds2
 
         if boundary == "periodic":
             return dy_dt[:, 2:-2]

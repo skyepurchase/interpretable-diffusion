@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import jax.random
-from flax import nnx
+
 from jax.random import split
 
 from models.ddim import DDIM
@@ -44,12 +44,11 @@ def noise_estimation_loss(
     return jnp.square((noise - eps)[:, condition:]).sum(axis=(1, 2, 3)).mean(axis=0)
 
 
-@nnx.jit
-def train_step(
-    model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
-) -> jax.Array:
+def ddim_loss(
+    model: DDIM, data: jax.Array, key: jax.Array
+) -> tuple[jax.Array, jax.Array]:
     """
-    Carry out a single train step; randomly sample noise and time steps, calculate the model loss, perform gradient descent.
+    Sample a diffusion timestep and noise then calculate the noise estimation loss.
 
     Parameters
     ----------
@@ -57,17 +56,15 @@ def train_step(
         The model to train
     data : Array
         The single data sample
-    optimizer : Optimizer
-        The optimizer with the model parameters
     key : Array
         PRNG key
-    epoch : int
-        The current epoch, used for logging
 
     Returns
     -------
-    losses : Array
-        Loss data to be logged
+    loss : Array ()
+        The noise estimation loss
+    aux : Array (1)
+        The loss stacked as its own auxiliary output
     """
     if not isinstance(model, DDIM):
         raise TypeError(f"Expected model type to be DDIM not {type(model)}")
@@ -76,7 +73,6 @@ def train_step(
         data = jnp.expand_dims(data, 3)
 
     batch_size = data.shape[0]
-    betas = model.betas
 
     key, time_key, noise_key = split(key, num=3)
     noise = jax.random.normal(noise_key, data.shape)
@@ -86,9 +82,5 @@ def train_step(
     )
     t = jnp.concatenate([t, model.num_timesteps - t - 1], axis=0)[:batch_size]
 
-    loss, grads = nnx.value_and_grad(noise_estimation_loss)(
-        model, data, t, noise, betas
-    )
-    optimizer.update(model, grads)
-
-    return loss[None]
+    loss = noise_estimation_loss(model, data, t, noise, model.betas)
+    return loss, loss[None]

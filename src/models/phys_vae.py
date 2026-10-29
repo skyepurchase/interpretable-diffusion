@@ -173,8 +173,8 @@ class PhysDecoder(nnx.Module):
         The underlying physical system
     time_dim : int
         The time dimension, equivalently the number of timesteps
-    t1 : int
-        The final timestep of the simulation
+    t1 : float
+        The final time of the simulation
     dt : float
         The length of the timestep
     L : float
@@ -196,7 +196,7 @@ class PhysDecoder(nnx.Module):
         pre_funcs: list[dict],
         post_funcs: list[dict],
         system: str,
-        t1: int,
+        t1: float,
         dt: float,
         L: float,
         time_dim: int,
@@ -212,6 +212,7 @@ class PhysDecoder(nnx.Module):
         self.t1 = t1
         self.dt = dt
         self.integral_level = integral_level
+        self.integral_len = (time_dim - 1) * integral_level + 1
         self.t_span = t_span
         self.x_grid = num_grid_points
         _, _, self.num_derivatives = get_physics_model(system)
@@ -283,7 +284,7 @@ class PhysDecoder(nnx.Module):
 
         Returns
         -------
-        series : Distribution (m, B, T)
+        series : Distribution (m, B, T, L)
             The statistics for the series with the mean and log variance stacked in the first axis
         """
 
@@ -355,7 +356,7 @@ class PhysDecoder(nnx.Module):
         assert y_seq is not None, "Failed to solve ODE"
 
         # trim_y_seq : (T, B*n, L*D)
-        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
+        trim_y_seq = y_seq[jnp.arange(0, self.integral_len, self.integral_level)]
 
         # trim_ys : (T, n, B, L*D)
         trim_ys = jnp.reshape(
@@ -386,9 +387,10 @@ class PhysDecoder(nnx.Module):
                 x_means, selections
             )
 
+        m, n = x_means.shape[0], x_means.shape[1]
         return (
-            x_means.reshape(-1, self.t_grid, self.x_grid),
-            jnp.ones((x_means.shape[0], self.t_grid, self.x_grid)) * self.x_log_sigma,
+            x_means.reshape(m, n, self.t_grid, self.x_grid),
+            jnp.ones((m, n, self.t_grid, self.x_grid)) * self.x_log_sigma,
         )
 
     def __call__(
@@ -466,7 +468,7 @@ class PhysDecoder(nnx.Module):
         assert y_seq is not None, "Failed to solve ODE"
 
         # trim_y_seq : (T, B, L*D)
-        trim_y_seq = y_seq[jnp.arange(0, self.t1, self.integral_level)]
+        trim_y_seq = y_seq[jnp.arange(0, self.integral_len, self.integral_level)]
 
         # x_mean : (B, T, L)
         x_mean = jnp.permute_dims(trim_y_seq[:, :, : self.x_grid], (1, 0, 2))
@@ -496,57 +498,90 @@ class PhysVAE(nnx.Module):
 
     Parameters
     ----------
-    cfg : PhysVAEConfig
-        The config for the network including the encoder and decoder
+    encoder : dict
+        The encoder network configuration
+    decoder : dict
+        The decoder network configuration
+    phys_param_ranges : list of (min, max) pairs
+        The model's prior/augmentation ranges over the physics parameters
+        (user-specified; distinct from the generation ranges in dataset_config)
+    dataset_config : dict
+        The dataset configuration; the PDE system definition (system, length,
+        time, x_grid, t_grid) is extracted from it
+    integral_level : int
+        The solver substeps per output frame
+    ode_solver : str
+        The ODE solver name
+    kl_balance : float
+        The weight of the KL divergence relative to the reconstruction
+    alpha : float
+        Weight of the least-action (discrepancy) regularizer
+    beta : float
+        Weight of the unmixing regularizer
+    gamma : float
+        Weight of the physics data augmentation regularizer
     rngs : nnx.Rngs
         The model RNGs
+
+    The data is generated on an even x_grid x t_grid discretisation of a
+    length x time domain (dataset_config is the single source of truth), so
+    the frame steps ds and dt are derived here rather than configured.
     """
 
     def __init__(
         self,
         encoder: dict,
         decoder: dict,
-        time_dim: int,
         phys_param_ranges: list[tuple[float, float]],
-        system: str,
         integral_level: int,
-        timestep: float,
         ode_solver: str,
         kl_balance: float,
         alpha: float,
         beta: float,
         gamma: float,
-        length: float = 0.0,
-        num_grid_points: int = 1,
+        dataset_config: dict,
         *,
         rngs: nnx.Rngs,
     ) -> None:
+        system = dataset_config["system"]
+        length = dataset_config["length"]
+        time = dataset_config["time"]
+        x_grid = dataset_config["x_grid"]
+        t_grid = dataset_config["t_grid"]
+
         self.integral_level = integral_level
-        self.integral_len = (time_dim - 1) * self.integral_level + 1
-        self.integral_step = timestep / float(integral_level)
+
+        # The data's frame step follows from the dataset definition
+        frame_dt = time / float(t_grid - 1)
+
+        self.integral_len = (t_grid - 1) * self.integral_level + 1
+        self.integral_step = frame_dt / float(integral_level)
 
         self.t_span = jnp.linspace(
             0.0, self.integral_step * (self.integral_len - 1), self.integral_len
         )
-        self.num_grid_points = num_grid_points
+        # Static final integration time (kept as a Python float so it stays
+        # concrete under jit, unlike the traced t_span array)
+        self.t_final = float(self.t_span[-1])
+        self.num_grid_points = x_grid
         _, num_phys_params, num_derivatives = get_physics_model(system)
         self.ode_dim = self.num_grid_points * num_derivatives
-        self.data_dim = self.num_grid_points * time_dim
+        self.data_dim = self.num_grid_points * t_grid
 
-        assert len(range(0, self.integral_len, self.integral_level)) == time_dim, (
-            f"Time dimension and integral steps not compatible {len(range(0, self.integral_len, self.integral_level))} != {time_dim}"
+        assert len(range(0, self.integral_len, self.integral_level)) == t_grid, (
+            f"Time dimension and integral steps not compatible {len(range(0, self.integral_len, self.integral_level))} != {t_grid}"
         )
 
         self.encode = PhysEncoder(
-            **encoder, num_grid_points=num_grid_points, time_dim=time_dim, rngs=rngs
+            **encoder, num_grid_points=x_grid, time_dim=t_grid, rngs=rngs
         )
         self.decode = PhysDecoder(
             **decoder,
-            t1=self.integral_len,
+            t1=self.t_final,
             dt=self.integral_step,
             L=length,
-            time_dim=time_dim,
-            num_grid_points=num_grid_points,
+            time_dim=t_grid,
+            num_grid_points=x_grid,
             integral_level=integral_level,
             t_span=self.t_span,
             ode_solver=ode_solver,
@@ -570,9 +605,10 @@ class PhysVAE(nnx.Module):
         """Reconstruct the input"""
         phys_stats, aux_stats, _ = self.encode(x)
         phys_latents, aux_latents = self.sample_latents(phys_stats, aux_stats, key)
-        init_y = x[:, : self.num_grid_points]
+        init_y = x[:, 0].reshape(-1, self.num_grid_points)
 
-        return self.decode(phys_latents, aux_latents, init_y)[0], phys_latents[0]
+        coeff_estimate = phys_stats[0][0]
+        return self.decode(phys_latents, aux_latents, init_y)[0], coeff_estimate
 
     def priors(self, batch_size: int) -> tuple[list[Distribution], list[Distribution]]:
         """
@@ -632,7 +668,7 @@ class PhysVAE(nnx.Module):
             ODETerm(self.decode.physics_model),
             self.decode.solver(),
             t0=0.0,
-            t1=self.integral_len,
+            t1=self.t_final,
             dt0=self.integral_step,
             y0=init_cond,
             args=params,
@@ -679,7 +715,7 @@ class PhysVAE(nnx.Module):
             key, sample_key = jax.random.split(key, 2)
 
             samples = stat[0] + (
-                jax.random.normal(sample_key, stat[0].shape) * jnp.exp(stat[1])
+                jax.random.normal(sample_key, stat[0].shape) * jnp.exp(0.5 * stat[1])
             )
 
             scaled_param = jnp.clip(samples, param_range[0], param_range[1])
@@ -691,7 +727,7 @@ class PhysVAE(nnx.Module):
             key, sample_key = jax.random.split(key, 2)
             aux_latents.append(
                 stat[0]
-                + jax.random.normal(sample_key, stat[0].shape) * jnp.exp(stat[1])
+                + jax.random.normal(sample_key, stat[0].shape) * jnp.exp(0.5 * stat[1])
             )
 
         return phys_latents, aux_latents

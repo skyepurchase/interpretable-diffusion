@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-from flax import nnx
 
 from models.phys_vae import PhysVAE
 from utils import Distribution
@@ -55,7 +54,7 @@ def ELBO_reconstruction_loss(
     ----------
     x : Array (B, T)
         The datapoint to evaluate on where B is the batch and T the timesteps
-    x_stat : Distribution (m, B, T)
+    x_stat : Distribution (m, B, T, L)
         The generated distribution statistics where m is the function combinations, B the batch and T the timesteps
     phys_stats : Distribution
         The generated physics latent stats
@@ -82,8 +81,8 @@ def ELBO_reconstruction_loss(
         kldiv += KL_divergence(stat[0], stat[1], prior[0], prior[1])
 
     # Only carry out on full run so last entry in x_stat
-    # x_stat : (m, B, T), x : (B, T)
-    reconstruction_err = jnp.pow(x_stat[0][-1] - x, 2).sum(axis=1).mean()
+    # x_stat : (m, B, T, L), x : (B, T, L)
+    reconstruction_err = jnp.pow(x_stat[0][-1] - x, 2).sum(axis=(1, 2)).mean()
 
     # Calculate negative ELBO
     return reconstruction_err, kldiv.mean()
@@ -144,10 +143,9 @@ def augmentation_loss(
             jax.random.uniform(
                 aug_key,
                 param.shape,
-                minval=param_range[0] / 2,
-                maxval=param_range[1] * 2,
+                minval=param_range[0],
+                maxval=param_range[1],
             )
-            + param_range[0]
         )
         aug_params.append(aug_param)
 
@@ -158,7 +156,8 @@ def augmentation_loss(
     model.train()
     aug_loss = jnp.zeros(())
     for phys_func, aug_param in zip(model.encode.phys_funcs, aug_params):
-        aug_loss += jnp.pow(phys_func(aug_x_mean) - aug_param, 2).sum(axis=1).mean()
+        mu, _ = jnp.split(phys_func(aug_x_mean), 2, axis=1)
+        aug_loss += jnp.pow(mu - aug_param, 2).sum(axis=1).mean()
 
     return aug_loss
 
@@ -180,13 +179,13 @@ def discrepancy_loss(x_stats: Distribution, mask: jax.Array) -> jax.Array:
     loss : Array
         The discrepancy loss
     """
-    # x_stats : (m, B, T)
+    # x_stats : (m, B, T, L)
 
-    # Calculate discrepancy matrix
+    # Calculate discrepancy matrix over per-sample combination pairs
     # divergences : (m - 1, m - 1, B)
     divergences = jax.vmap(
         lambda mu_p: jax.vmap(
-            lambda mu_q: jnp.sum((mu_p - mu_q) ** 2, axis=1),
+            lambda mu_q: jnp.sum((mu_p - mu_q) ** 2, axis=(-2, -1)),
         )(x_stats[0][:-1]),
     )(x_stats[0][1:])
 
@@ -196,7 +195,7 @@ def discrepancy_loss(x_stats: Distribution, mask: jax.Array) -> jax.Array:
     return masked_divs.sum() / mask.sum()
 
 
-def loss_fn(
+def phys_vae_loss(
     model: PhysVAE, data: jax.Array, key: jax.Array
 ) -> tuple[jax.Array, jax.Array]:
     """
@@ -228,7 +227,7 @@ def loss_fn(
 
     # Decode samples
     init_y = data[:, 0].reshape(-1, model.num_grid_points)
-    # x_stat : (m, B, T)
+    # x_stat : (m, B, T, L)
     x_stat = model.decode.full_forward(phys_latents, aux_latents, init_y)
 
     # Standard error
@@ -255,35 +254,3 @@ def loss_fn(
     return full_loss, jnp.stack(
         [full_loss, rec_err, kldiv, disc_loss, phys_loss, data_aug_loss]
     )
-
-
-@nnx.jit
-def train_step(
-    model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
-) -> jax.Array:
-    """
-    Carry out a single VAE train step
-
-    Parameters
-    ----------
-    model : PhysVAE
-        The model to train
-    data : Array
-        The datapoint
-    optimizer : Optimizer
-        The optimizer for the models parameters
-    key : Array
-        PRNG key
-
-    Returns
-    -------
-    losses : Array
-        Loss data to be logged
-    """
-    if not isinstance(model, PhysVAE):
-        raise TypeError(f"Expected model to be type PhysVAE not {type(model)}")
-
-    (_, losses), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, data, key)
-    optimizer.update(model, grads)
-
-    return losses
