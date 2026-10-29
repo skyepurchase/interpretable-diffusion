@@ -1,4 +1,5 @@
 import os
+import shutil
 import time
 from argparse import ArgumentParser
 from collections import defaultdict
@@ -15,7 +16,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import DATASETS
-from models import LOSS_FNS, LOSS_LABELS, MODELS, save_model
+from models import LOSS_FNS, LOSS_LABELS, MODELS
 from utils import load_config
 
 
@@ -121,10 +122,14 @@ def train(
     # and the total loss itself for vae and ddim
     val_rec_idx = 1 if config["model"] in ("phys_vae", "paid") else 0
 
-    # Best-validation checkpointing; the arena holds the async checkpointers
-    # of the val-checkpoint saves so they can be waited on before returning
+    # Best-validation checkpointing; each improvement is saved asynchronously
+    # to an incrementing id folder so no save waits on another. The arena holds
+    # the checkpointers and their ids so the folders can be removed once the
+    # best state has been restored
     val_ckpt_dir = os.path.join(config["checkpoint_dir"], "val-checkpoint")
-    checkpointers = []
+    os.makedirs(val_ckpt_dir, exist_ok=True)
+    checkpointers: list[tuple[ocp.AsyncCheckpointer, int]] = []
+    ckpt_id = 0
 
     # Training loop
     final_loss = 0.0
@@ -186,11 +191,13 @@ def train(
             best_loss = running_loss["val_reconstruction"]
             best_epoch = epoch
 
-            # Wait on in-flight saves before overwriting the latest folder
-            for checkpointer in checkpointers:
-                checkpointer.wait_until_finished()
-            checkpointers.clear()
-            checkpointers.append(save_model(model, val_ckpt_dir))
+            _, state = nnx.split(model)
+            checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
+            checkpointer.save(
+                os.path.join(os.getcwd(), val_ckpt_dir, str(ckpt_id)), state
+            )
+            checkpointers.append((checkpointer, ckpt_id))
+            ckpt_id += 1
 
         if local:
             assert isinstance(pbar, tqdm)
@@ -203,16 +210,20 @@ def train(
     end = time.perf_counter()
     train_time = end - start
 
-    # Wait on the outstanding val-checkpoint saves and restore the best state
-    for checkpointer in checkpointers:
+    # Wait on the outstanding val-checkpoint saves, restore the best state
+    # (the latest improvement), and remove the id folders to stay clean
+    for checkpointer, _ in checkpointers:
         checkpointer.wait_until_finished()
 
     graph, state = nnx.split(model)
     checkpointer = ocp.StandardCheckpointer()
     best_state = checkpointer.restore(
-        os.path.join(os.getcwd(), val_ckpt_dir, "latest"), state
+        os.path.join(os.getcwd(), val_ckpt_dir, str(checkpointers[-1][1])), state
     )
     model = nnx.merge(graph, best_state)
+
+    for _, ckpt_id in checkpointers:
+        shutil.rmtree(os.path.join(os.getcwd(), val_ckpt_dir, str(ckpt_id)))
 
     return TrainResult(
         model=model,
