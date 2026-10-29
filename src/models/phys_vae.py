@@ -607,7 +607,8 @@ class PhysVAE(nnx.Module):
         phys_latents, aux_latents = self.sample_latents(phys_stats, aux_stats, key)
         init_y = x[:, 0].reshape(-1, self.num_grid_points)
 
-        return self.decode(phys_latents, aux_latents, init_y)[0], phys_latents[0]
+        coeff_estimate = phys_stats[0][0]
+        return self.decode(phys_latents, aux_latents, init_y)[0], coeff_estimate
 
     def priors(self, batch_size: int) -> tuple[list[Distribution], list[Distribution]]:
         """
