@@ -142,8 +142,11 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
     phys_gen = x_hat[0]
 
     reconstruction_loss = (
-        # Reconstruct the full data to improve smoothness
-        jnp.square((data - x_hat[-1])).sum(axis=tuple(range(1, data.ndim))).mean()
+        # Only train on the noised generation; the conditioned frames are fed
+        # clean and are left out of the loss entirely
+        jnp.square(data[:, model.condition :] - x_hat[-1][:, model.condition :])
+        .sum(axis=tuple(range(1, data.ndim)))
+        .mean()
     )
 
     phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen)).sum(axis=-1)

@@ -8,62 +8,24 @@ from tqdm import tqdm
 from models.paid import PAID
 from models.phys_vae import PhysVAE
 from utils import load_config
-from visualisers.ddim import generate_images
 
 
-def evaluate_paid(
+def evaluate(
     model: nnx.Module,
     testloader: DataLoader,
     local: bool = False,
     *,
     key: PRNGKeyArray,
 ):
-    assert isinstance(model, PAID), f"{type(model)} is not supported."
-    model.eval()
+    """Evaluate a model over a test loader via its __call__(x, key) protocol.
 
-    forecast_mae = None
-    coeff_mae = jnp.zeros((0, 1))
-    pbar = tqdm(testloader, desc="Evaluating") if local else testloader
-    for batch, coeffs in pbar:
-        if len(batch.shape) < 4:
-            batch = jnp.expand_dims(batch, axis=-1)
+    Both PAID and PhysVAE return (forecast, coefficient) from their call,
+    so the evaluation is shared. Models outside the physics pair do not
+    follow this protocol and are not supported.
 
-        forecast = generate_images(
-            model,
-            batch,
-            condition=model.condition,
-            sample_method="ddim",
-            estimation_type="mean",
-            jump=10,
-            key=key,
-        )
-
-        assert forecast.shape[1:] == (*batch.shape[1:3], 2), (
-            f"Expected forecast to have shape (B, {batch.shape[1]}, {batch.shape[2]}, 2) received {forecast.shape}."
-        )
-        true_forecast = forecast[:, :, :, :1]
-        coeff_pred = forecast[:, 0, 0, 1].reshape(-1, 1)
-
-        if forecast_mae is None:
-            forecast_mae = jnp.absolute(true_forecast - batch)
-        else:
-            forecast_mae = jnp.concatenate(
-                [forecast_mae, jnp.absolute(true_forecast - batch)]
-            )
-        coeff_mae = jnp.concatenate([coeff_mae, jnp.absolute(coeff_pred - coeffs)])
-
-    assert forecast_mae is not None  # typing
-    return forecast_mae.mean().item(), coeff_mae.mean().item()
-
-
-def evaluate_phys_vae(
-    model: nnx.Module,
-    testloader: DataLoader,
-    local: bool = False,
-    *,
-    key: PRNGKeyArray,
-):
-    assert isinstance(model, PhysVAE), f"{type(model)} is not supported."
+    Returns the forecast MAE and the coefficient MAE.
+    """
+    assert isinstance(model, (PAID, PhysVAE)), f"{type(model)} is not supported."
     model.eval()
 
     forecast_mae = None
@@ -83,12 +45,6 @@ def evaluate_phys_vae(
 
     assert forecast_mae is not None  # typing
     return forecast_mae.mean().item(), coeff_mae.mean().item()
-
-
-EVALUATORS = {
-    "paid": evaluate_paid,
-    "phys_vae": evaluate_phys_vae,
-}
 
 
 if __name__ == "__main__":
@@ -129,13 +85,7 @@ if __name__ == "__main__":
         **config["dataset_config"], key=data_key
     )
 
-    if config["model"] in EVALUATORS:
-        forecast, coeff = EVALUATORS[config["model"]](
-            model, test_loader, args.local, key=key
-        )
-    else:
-        print(f"{config['model']} is not supported")
-        quit()
+    forecast, coeff = evaluate(model, test_loader, args.local, key=key)
 
     print()
     print(f"\nForecast error: {forecast:.2E}, coefficient error: {coeff:.2E}")
