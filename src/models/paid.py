@@ -575,7 +575,8 @@ class PAID(nnx.Module):
         )
 
         t_last = self.num_timesteps - 1
-        num_steps = -(-self.num_timesteps // self.jump)
+        # Ceiling division so the final step lands exactly on tau = 0
+        num_steps = (self.num_timesteps + self.jump - 1) // self.jump
 
         def ddim_step(i: jax.Array, x_t: jax.Array) -> jax.Array:
             t = t_last - i * self.jump

@@ -6,7 +6,7 @@ import trackio
 from flax import nnx
 from jax.random import split
 
-from eval import EVALUATORS
+from eval import evaluate
 from models import save_model
 from train import train
 from utils import load_config
@@ -76,14 +76,9 @@ def main() -> None:
 
     # Evaluate
     print("\nEvaluating...")
-    if config["model"] in EVALUATORS:
-        forecast_mae, coeff_mae = EVALUATORS[config["model"]](
-            result.model, result.val_loader, args.local, key=eval_key
-        )
-    else:
-        print(f"Warning: {config['model']} is not supported for evaluation")
-        forecast_mae = None
-        coeff_mae = None
+    forecast_mae, coeff_mae = evaluate(
+        result.model, result.val_loader, args.local, key=eval_key
+    )
 
     # Build and log markdown report
     report = f"""# Training Report
