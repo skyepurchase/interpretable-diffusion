@@ -49,6 +49,7 @@ class PhysUNet2D(nnx.Module):
         solver: Callable[[], AbstractSolver],
         rngs: nnx.Rngs,
         embed_dim: int = 128,
+        map: str = "identity",
     ):
         # Constants
         num_pre_funcs = len(pre_funcs)
@@ -74,6 +75,18 @@ class PhysUNet2D(nnx.Module):
 
         self.physics_model = physics_model
         self.solver = solver
+
+        # Out-ODE readout map g: applied to the generated series identically
+        # for every combination (ungated readout, never policed by the
+        # discrepancy regulariser). "linear" acts across the snapshot
+        # dimension only (num_grid_points -> num_grid_points per frame, no
+        # time mixing).
+        assert map in ("identity", "linear"), f"Unknown out-ODE map: {map}"
+        self.out_map = (
+            nnx.Linear(self.num_grid_points, self.num_grid_points, rngs=rngs)
+            if map == "linear"
+            else None
+        )
 
         # Modules
         # Diffusion step embedding
@@ -263,6 +276,10 @@ class PhysUNet2D(nnx.Module):
                 f"Shape of post_selections must match number of post-ODE functions and post_combinations, {post_selections.shape} != {(len(self.post_funcs), pre_combs * post_combs)} and {len(self.post_funcs)} != 0."
             )
 
+        assert len(aux_latents) == len(self.pre_funcs) + len(self.post_funcs), (
+            f"Expected one auxiliary latent per pre/post func, {len(aux_latents)} != {len(self.pre_funcs)} + {len(self.post_funcs)}"
+        )
+
         def PDE(t: RealScalarLike, y: PyTree, args: PyTree):
             """Internal PDE to be solved during the generation process."""
             # y : (B*n, X*D)
@@ -324,10 +341,17 @@ class PhysUNet2D(nnx.Module):
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
 
+        # ^(T, B*n, X)
+        y_phys = y_seq[:, :, : self.num_grid_points]
+        # Ungated readout: the map acts on the snapshot axis (last) of every
+        # frame, identically for all combinations
+        if self.out_map is not None:
+            y_phys = self.out_map(y_phys)
+
         # ^(n, B, X*T)
         phys_x_hat = jnp.reshape(
-            # ^(T, B*n, X*D) => ^(B*n, T, X)
-            jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
+            # ^(T, B*n, X) => ^(B*n, T, X)
+            jnp.permute_dims(y_phys, (1, 0, 2)),
             (pre_combs, -1, self.data_dim),
         )
 
@@ -343,9 +367,7 @@ class PhysUNet2D(nnx.Module):
         ):
             # z_aux : (B, Z), phys : (B, X*T) -> (B, X*T)
             def apply_func(phys, apply):
-                return (1 - apply) * phys + apply * post_func(
-                    jnp.concatenate([z_aux, phys], axis=-1)
-                )
+                return phys + apply * post_func(jnp.concatenate([z_aux, phys], axis=-1))
 
             # phys_x_hat : (m, B, X*T)
             phys_x_hat = jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(
@@ -458,6 +480,7 @@ class PAID(nnx.Module):
         embed_dim: int = 128,
         condition: int = 5,
         jump: int = 10,
+        map: str = "identity",
         pad: list[tuple] = [(0, 0), (0, 0)],
         *,
         rngs: nnx.Rngs,
@@ -520,6 +543,7 @@ class PAID(nnx.Module):
             self.physics_model,
             self.solver,
             embed_dim=embed_dim,
+            map=map,
             rngs=rngs,
         )
 
