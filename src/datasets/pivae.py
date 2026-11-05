@@ -473,22 +473,30 @@ def get_pivae(
         "train_coeff",
     )
 
-    # The manifest records the grid config the cached data was generated on
-    # and the file name of each split (id'd by t_grid). A config matching the
-    # manifest loads the cached files; anything else regenerates under the new
-    # id, leaving old-id files on disk.
-    manifest = None
+    # The manifest records every generated grid: one [grid_size.<t_grid>]
+    # section per cache holding the domain config and the id'd file name of
+    # each split. A config whose t_grid has a matching section loads that
+    # cache; anything else regenerates under its own id, leaving the other
+    # grids (and their files on disk) untouched.
+    manifest = {}
     if os.path.exists(manifest_path):
         with open(manifest_path, "rb") as f:
             manifest = tomllib.load(f)
+    # Keep only per-grid tables; the old single-cache format (scalar keys
+    # directly under [grid_size]) is discarded so the rewrite below is
+    # well-formed
+    manifest["grid_size"] = {
+        grid_id: grid
+        for grid_id, grid in manifest.get("grid_size", {}).items()
+        if isinstance(grid, dict)
+    }
 
-    grid_size = (manifest or {}).get("grid_size", {})
-    files = (manifest or {}).get("files", {})
+    entry = manifest["grid_size"].get(str(t_grid), {})
+    files = entry.get("files", {})
     cache_valid = (
-        manifest is not None
-        and grid_size.get("t_grid") == t_grid
-        and grid_size.get("x_grid") == x_grid
-        and grid_size.get("time") == time
+        bool(entry)
+        and entry.get("x_grid") == x_grid
+        and entry.get("time") == time
         and all(
             role in files and os.path.exists(os.path.join(system_dir, files[role]))
             for role in splits
@@ -565,21 +573,23 @@ def get_pivae(
                 allow_pickle=False,
             )
 
-        manifest = {
-            "grid_size": {"t_grid": t_grid, "x_grid": x_grid, "time": time},
+        manifest["grid_size"][str(t_grid)] = {
+            "x_grid": x_grid,
+            "time": time,
             "files": {role: f"{role}_{t_grid}.npy" for role in splits},
         }
-        lines = [
-            "[grid_size]",
-            f"t_grid = {t_grid}",
-            f"x_grid = {x_grid}",
-            f"time = {time!r}",
-            "",
-            "[files]",
-        ]
-        lines += [f'{role} = "{name}"' for role, name in manifest["files"].items()]
+        lines = []
+        for grid_id, grid in manifest["grid_size"].items():
+            lines.append(f"[grid_size.{grid_id}]")
+            lines.append(f"x_grid = {grid['x_grid']}")
+            lines.append(f"time = {grid['time']!r}")
+            lines.append("")
+            lines.append(f"[grid_size.{grid_id}.files]")
+            for role, name in grid["files"].items():
+                lines.append(f'{role} = "{name}"')
+            lines.append("")
         with open(manifest_path, "w") as f:
-            f.write("\n".join(lines) + "\n")
+            f.write("\n".join(lines).rstrip() + "\n")
 
     perm_key, key = jax.random.split(key)
     train_perm = jax.random.permutation(perm_key, jnp.arange(train_pool.shape[0]))[
