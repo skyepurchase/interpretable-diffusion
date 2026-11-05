@@ -3,6 +3,7 @@ from argparse import ArgumentParser
 from datetime import datetime
 
 import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import seaborn as sns
 from flax import nnx
@@ -110,6 +111,10 @@ def visualise(
     window = getattr(loaded_model, "window", None)
     if window is not None:
         inputs = inputs[:, :window]
+
+    # The visualisers expect channelled data (B, T, X, 1)
+    if inputs.ndim == 3:
+        inputs = jnp.expand_dims(inputs, -1)
 
     print("Generating samples...\n")
     if "system" in dataset_config and dataset_config["system"] != "":

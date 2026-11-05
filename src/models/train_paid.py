@@ -136,13 +136,13 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
         [data[:, : model.condition], noisy_x[:, model.condition :]], axis=1
     )
 
-    # (m, B, T, X, 1), (B, T, X, 1), (B, Z)
+    # (m, B, T, X, 1), (B, window, X, 1), (B, Z)
     x_hat, phys_pred, phys_params = model.denoiser.full_forward(x, tau)
 
+    # x_hat[-1] is the generated region u[k:T+k]; the conditioned frames are
+    # fed clean and left out of the loss entirely
     reconstruction_loss = (
-        # Only train on the noised generation; the conditioned frames are fed
-        # clean and are left out of the loss entirely
-        jnp.square(data[:, model.condition :] - x_hat[-1][:, model.condition :])
+        jnp.square(data[:, model.condition :] - x_hat[-1])
         .sum(axis=tuple(range(1, data.ndim)))
         .mean()
     )

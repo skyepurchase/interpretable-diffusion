@@ -261,7 +261,7 @@ class PhysUNet2D(nnx.Module):
         Returns
         -------
         phys_x_hat : Array (m, B, X*T)
-            The estimated clean sample incorporating physics knowledge
+            The generated region u[k:T+k] for each combination
         """
         if x.ndim == 3:
             x = jnp.expand_dims(x, -1)
@@ -361,18 +361,11 @@ class PhysUNet2D(nnx.Module):
         if self.out_map is not None:
             y_phys = self.out_map(y_phys)
 
-        # Prepend the condition frames from the input: ^(window, B*n, X)
-        cond_frames = jnp.tile(
-            jnp.permute_dims(x[:, : self.condition, :, 0], (1, 0, 2)),
-            reps=(1, pre_combs, 1),
-        )
-        y_full = jnp.concatenate([cond_frames, y_phys], axis=0)
-
-        # ^(n, B, X*window)
+        # ^(n, B, X*T)
         phys_x_hat = jnp.reshape(
-            # ^(window, B*n, X) => ^(B*n, window, X)
-            jnp.permute_dims(y_full, (1, 0, 2)),
-            (pre_combs, -1, self.data_dim),
+            # ^(T, B*n, X) => ^(B*n, T, X)
+            jnp.permute_dims(y_phys, (1, 0, 2)),
+            (pre_combs, -1, (self.time_dim - self.condition) * self.num_grid_points),
         )
 
         # phys_x_hat : (m, B, X*T)
@@ -410,7 +403,7 @@ class PhysUNet2D(nnx.Module):
         Returns
         -------
         x_hat : Array (B, T, X, 1)
-            Estimation of the clean x
+            Estimation of the generated region u[k:T+k]
         """
         aux_latents, phys_latents, _ = self._embed(x, tau)
 
@@ -424,7 +417,8 @@ class PhysUNet2D(nnx.Module):
             "Internal issue with generation should return single combination."
         )
 
-        return jnp.reshape(x_hat[0], x.shape)
+        gen_shape = (x.shape[0], self.time_dim - self.condition) + x.shape[2:]
+        return jnp.reshape(x_hat[0], gen_shape)
 
     def full_forward(
         self, x: jax.Array, tau: jax.Array
@@ -442,9 +436,9 @@ class PhysUNet2D(nnx.Module):
         Returns
         -------
         x_hat : Array (m, B, T, X, 1)
-            Estimation of clean signal using combinations of auxiliary functions
+            Estimation of the generated region u[k:T+k] for each combination
         phys_sig : Array (B, T, X, 1)
-            Estimation of the known physics signal
+            Estimation of the known physics signal over the full window
         phys_params : list[Array (B, Z)]
             Estimation of physics parameters
         """
@@ -468,9 +462,14 @@ class PhysUNet2D(nnx.Module):
             "Internal issue with generation should return all combinations."
         )
 
-        # x_hat: (m, B, T, X, 1), phys_sig : (B, T, X, 1), phys_params : (B, Z)
+        # x_hat: (m, B, T, X, 1), phys_sig : (B, window, X, 1)
+        gen_shape = (
+            (self.pre_combs * self.post_combs, x.shape[0])
+            + (self.time_dim - self.condition,)
+            + x.shape[2:]
+        )
         return (
-            jnp.reshape(x_hat, (self.pre_combs * self.post_combs,) + x.shape),
+            jnp.reshape(x_hat, gen_shape),
             jnp.reshape(phys_sig, x.shape),
             phys_params,
         )
@@ -649,13 +648,15 @@ class PAID(nnx.Module):
 
             tau = jnp.full((x.shape[0],), t, dtype="int32")
             x_hat, _, _ = self.denoiser.full_forward(x_t, tau)
+            # x_0 : (B, T, X, 1) -- the generated region only
             x_0 = x_hat[-1]
 
             alpha_t = alphas[t]
             alpha_next = alphas[t_next]
 
-            # DDIM with the noise implied by x_t and x_0 (deterministic)
-            eps = (x_t - x_0 * jnp.sqrt(alpha_t)) / jnp.sqrt(1.0 - alpha_t)
+            # DDIM over the noised region with the noise implied by x_t and x_0
+            x_t_gen = x_t[:, self.condition :]
+            eps = (x_t_gen - x_0 * jnp.sqrt(alpha_t)) / jnp.sqrt(1.0 - alpha_t)
             x_next = x_0 * jnp.sqrt(alpha_next) + eps * jnp.sqrt(1.0 - alpha_next)
             x_next = jax.lax.cond(
                 t_next == 0,
@@ -664,9 +665,7 @@ class PAID(nnx.Module):
             )
 
             # Conditioned frames stay clean throughout
-            return jnp.concatenate(
-                [x_t[:, : self.condition], x_next[:, self.condition :]], axis=1
-            )
+            return jnp.concatenate([x_t[:, : self.condition], x_next], axis=1)
 
         x_0 = jax.lax.fori_loop(0, num_steps, ddim_step, x_t)
 
