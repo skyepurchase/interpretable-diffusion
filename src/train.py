@@ -108,7 +108,6 @@ def train(
         )
     optimizer = nnx.Optimizer(model, gradient_transform, wrt=nnx.Param)
 
-    # Generic train step; the validation step calls the loss directly (no grads)
     @nnx.jit
     def train_step(
         model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
@@ -123,7 +122,6 @@ def train(
     # and the total loss itself for vae and ddim
     val_rec_idx = 1 if config["model"] in ("phys_vae", "paid") else 0
 
-    # Best-validation checkpointing; improvements save asynchronously to id folders
     val_ckpt_dir = os.path.join(config["checkpoint_dir"], "val-checkpoint")
     os.makedirs(val_ckpt_dir, exist_ok=True)
     checkpointers: list[tuple[ocp.AsyncCheckpointer, int]] = []
@@ -220,7 +218,7 @@ def train(
     end = time.perf_counter()
     train_time = end - start
 
-    # Wait on the outstanding saves, restore the best state, remove the id folders
+    # Wait on the outstanding saves
     for checkpointer, _ in checkpointers:
         checkpointer.wait_until_finished()
 

@@ -223,7 +223,6 @@ class PhysDecoder(nnx.Module):
 
         self.x_log_sigma = x_log_sigma
 
-        # Ungated per-frame readout on the snapshot axis, never policed by the discrepancy regulariser
         assert map in ("identity", "linear"), f"Unknown out-ODE map: {map}"
         self.out_map = (
             nnx.Linear(self.x_grid, self.x_grid, rngs=rngs) if map == "linear" else None
@@ -262,7 +261,6 @@ class PhysDecoder(nnx.Module):
         self.pre_selections, self.post_selections = gen_selections(
             self.num_pre_funcs, self.num_post_funcs
         )
-        # gen_selections returns placeholder rows for empty func lists
         if self.num_pre_funcs > 0:
             assert self.pre_selections.shape == (self.num_pre_funcs, self.pre_combs), (
                 f"Pre selections must be (num_pre_funcs, pre_combs), {self.pre_selections.shape} != {(self.num_pre_funcs, self.pre_combs)}"
@@ -383,7 +381,6 @@ class PhysDecoder(nnx.Module):
         )
         # trim_y : (n, B, T, L)
         trim_y = jnp.permute_dims(trim_ys[:, :, :, : self.x_grid], (1, 2, 0, 3))
-        # Ungated readout on the snapshot axis, identical for all combinations
         if self.out_map is not None:
             trim_y = self.out_map(trim_y)
         # x_mean : (n, B, L*T)
@@ -498,7 +495,6 @@ class PhysDecoder(nnx.Module):
 
         # x_mean : (B, T, L)
         x_mean = jnp.permute_dims(trim_y_seq[:, :, : self.x_grid], (1, 0, 2))
-        # Ungated readout on the snapshot axis
         if self.out_map is not None:
             x_mean = self.out_map(x_mean)
         # x_means : (B, L*T)
@@ -593,7 +589,6 @@ class PhysVAE(nnx.Module):
         self.t_span = jnp.linspace(
             0.0, self.integral_step * (self.integral_len - 1), self.integral_len
         )
-        # Static final integration time; a Python float stays concrete under jit
         self.t_final = float(self.t_span[-1])
         self.num_grid_points = x_grid
         _, num_phys_params, num_derivatives = get_physics_model(system)

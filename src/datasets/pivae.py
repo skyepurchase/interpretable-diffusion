@@ -10,7 +10,6 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from datasets.loader import ArrayLoader
 
-# Fixed dataset generation seed so regenerated datasets are always identical
 GENERATION_SEED = 169800
 
 
@@ -471,13 +470,11 @@ def get_pivae(
         "train_coeff",
     )
 
-    # The manifest holds one [grid_size.<t_grid>] section per cache; a
-    # matching section loads, anything else regenerates under its own id
+    # The manifest holds one [grid_size.<t_grid>] section per cache
     manifest = {}
     if os.path.exists(manifest_path):
         with open(manifest_path, "rb") as f:
             manifest = tomllib.load(f)
-    # Keep only per-grid tables; the old single-cache format is discarded
     manifest["grid_size"] = {
         grid_id: grid
         for grid_id, grid in manifest.get("grid_size", {}).items()

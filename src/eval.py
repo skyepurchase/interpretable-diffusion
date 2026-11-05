@@ -27,7 +27,6 @@ def evaluate(
     assert isinstance(model, (PAID, PhysVAE)), f"{type(model)} is not supported."
     model.eval()
 
-    # PAID is evaluated on its denoised region [k:T+k]; others on the full batch
     if isinstance(model, PAID):
         window, condition = model.window, model.condition
     else:

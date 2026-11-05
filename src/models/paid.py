@@ -62,9 +62,8 @@ class PhysUNet2D(nnx.Module):
         )
 
         ## PDE solver constants
-        self.t_span = t_span
         self.condition = condition
-        # The solve covers only the denoised region, inited from the last clean frame
+        # The solve covers only the denoised region
         cond_idx = condition - 1 if condition > 0 else 0
         self.t0 = float(t_span[cond_idx])
         self.t1 = t1
@@ -74,13 +73,11 @@ class PhysUNet2D(nnx.Module):
         self.pde_dim = pde_dim
         self.time_dim = time_dim
         self.data_dim = num_grid_points * time_dim
-        # Embedding width decoupled from data_dim so large grids stay small
         self.embed_dim = embed_dim
 
         self.physics_model = physics_model
         self.solver = solver
 
-        # Ungated per-frame readout on the snapshot axis, never policed by the discrepancy regulariser
         assert map in ("identity", "linear"), f"Unknown out-ODE map: {map}"
         self.out_map = (
             nnx.Linear(self.num_grid_points, self.num_grid_points, rngs=rngs)
@@ -140,7 +137,6 @@ class PhysUNet2D(nnx.Module):
                     rngs=rngs,
                 ),
                 nnx.sigmoid,
-                # Rescale by the configured range; the closure captures its own (lo, hi)
                 lambda x, lo=min, hi=max: x * (hi - lo) + lo,
             )
             self.phys_funcs.append(phys_func)
@@ -320,7 +316,7 @@ class PhysUNet2D(nnx.Module):
             # ys_dot: (B*n, X*D)
             return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.pde_dim))
 
-        # init_cond : ^(B*n, X*D) from the last clean frame
+        # init_cond : ^(B*n, X*D)
         cond_idx = self.condition - 1 if self.condition > 0 else 0
         init_cond = jnp.tile(
             jnp.pad(
@@ -345,7 +341,6 @@ class PhysUNet2D(nnx.Module):
 
         # ^(T, B*n, X)
         y_phys = y_seq[:, :, : self.num_grid_points]
-        # Ungated readout on the snapshot axis, identical for all combinations
         if self.out_map is not None:
             y_phys = self.out_map(y_phys)
 
@@ -510,7 +505,6 @@ class PAID(nnx.Module):
         self.aug_reg = aug_reg
 
         # Physics constants + functions
-        # The PDE frame step derives from dataset_config, the data's grid
         self.integral_level = pde["integral_level"]
         assert condition > 1, (
             f"Condition must be greater than 1, received {condition}. With a "
@@ -519,20 +513,20 @@ class PAID(nnx.Module):
         )
         self.condition = condition
 
-        # Frames denoised past the condition; legacy configs fall back to t_grid - condition
-        self.time_dim = pde.get("gen_steps", t_grid - self.condition)
-        assert self.time_dim > 0, (
-            f"Generation length must be positive, received {self.time_dim}. "
+        # Frames denoised past the condition
+        gen_steps = pde.get("gen_steps", t_grid - self.condition)
+        assert gen_steps > 0, (
+            f"Generation length must be positive, received {gen_steps}. "
             "Legacy configs derive it as t_grid - condition; add pde.gen_steps "
             "when the condition equals or exceeds t_grid."
         )
         # The denoiser sees the condition frames plus the generated frames
-        self.window = self.time_dim + self.condition
+        self.window = gen_steps + self.condition
 
         frame_dt = time / float(t_grid)
         self.dt = frame_dt / float(self.integral_level)
         self.t_span = jnp.arange(self.window) * frame_dt
-        # t1 from the span itself so float32 rounding cannot push saveat points outside [t0, t1]
+        # avoid rounding saveat points outside [t0, t1]
         self.t1 = float(self.t_span[-1])
 
         self.num_grid_points = x_grid

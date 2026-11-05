@@ -146,8 +146,6 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
         .mean()
     )
 
-    # Pure physics trajectory over the full window; no alpha weighting as
-    # the single-step denoise is hardest at high tau
     phys_traj = model.generate_physics(
         phys_params, data[:, 0].reshape(-1, model.num_grid_points)
     )
