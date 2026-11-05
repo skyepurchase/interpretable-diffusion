@@ -63,6 +63,7 @@ def generate_pendulum_data(
     t_grid: int = 50,
     x_grid: int = 1,
     time: float = 2.5,
+    length: float = 0.0,
     phys_param_ranges: tuple = (
         (jnp.pi / 4, jnp.pi),  # omega
         (0.0, 0.8),  # xi
