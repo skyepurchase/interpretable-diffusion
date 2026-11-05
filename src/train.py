@@ -7,15 +7,15 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import jax
-import orbax.checkpoint as ocp
 import optax
+import orbax.checkpoint as ocp
 import trackio
 from flax import nnx
 from jax.random import split
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets import DATASETS
+from datasets.loader import ArrayLoader
 from models import LOSS_FNS, LOSS_LABELS, MODELS
 from utils import load_config
 
@@ -25,7 +25,7 @@ class TrainResult:
     """Result of a training run."""
 
     model: nnx.Module
-    val_loader: DataLoader
+    val_loader: ArrayLoader
     final_loss: float
     best_loss: float
     best_epoch: int

@@ -2,9 +2,9 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import PRNGKeyArray
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from datasets.loader import ArrayLoader
 from models.paid import PAID
 from models.phys_vae import PhysVAE
 from utils import load_config
@@ -12,7 +12,7 @@ from utils import load_config
 
 def evaluate(
     model: nnx.Module,
-    testloader: DataLoader,
+    testloader: ArrayLoader,
     local: bool = False,
     *,
     key: PRNGKeyArray,

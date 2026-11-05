@@ -20,11 +20,11 @@ def remove_padding(a: Array, padding: list[tuple[int, int]]):
     assert len(padding) == len(a.shape) - 2, (
         f"Number of padding dimensions needs to match a padding dimensions, {len(padding)} != {len(a.shape) - 2}."
     )
-    assert all(map(lambda p: len(p) == 2, padding)), (
-        f"Expected padding to specify two numbers, received {list(map(lambda p: len(
-                    p
-                ), padding))}."
-    )
+    assert all(
+        map(lambda p: len(p) == 2, padding)
+    ), f"Expected padding to specify two numbers, received {
+        list(map(lambda p: len(p), padding))
+    }."
 
     for dim in range(1, len(a.shape) - 1):
         length = a.shape[dim]

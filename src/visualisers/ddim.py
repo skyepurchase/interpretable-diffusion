@@ -260,15 +260,6 @@ def generate_images(
     return images[-1]
 
 
-def generate_mnist(
-    model: nnx.Module, array_like: jax.Array, key: jax.Array
-) -> jax.Array:
-    """
-    Wrapper for generating images that clips the output to be in the range 0 and 1.
-    """
-    return jnp.clip(generate_images(model, array_like, key=key), 0, 1)
-
-
 def generate_timeseries(
     model: nnx.Module, initial_condition: jax.Array, jump: int = 10, *, key: jax.Array
 ) -> jax.Array:

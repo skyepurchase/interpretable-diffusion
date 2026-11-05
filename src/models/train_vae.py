@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-
 from jax.scipy.stats import bernoulli, norm
 
 from models.vae import VAE
