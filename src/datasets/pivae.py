@@ -10,9 +10,7 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from datasets.loader import ArrayLoader
 
-# Fixed dataset generation seed. Hardcoded (not exposed in configs) so the
-# generated dataset is always identical regardless of when or how often it
-# is created.
+# Fixed dataset generation seed so regenerated datasets are always identical
 GENERATION_SEED = 169800
 
 
@@ -473,18 +471,13 @@ def get_pivae(
         "train_coeff",
     )
 
-    # The manifest records every generated grid: one [grid_size.<t_grid>]
-    # section per cache holding the domain config and the id'd file name of
-    # each split. A config whose t_grid has a matching section loads that
-    # cache; anything else regenerates under its own id, leaving the other
-    # grids (and their files on disk) untouched.
+    # The manifest holds one [grid_size.<t_grid>] section per cache; a
+    # matching section loads, anything else regenerates under its own id
     manifest = {}
     if os.path.exists(manifest_path):
         with open(manifest_path, "rb") as f:
             manifest = tomllib.load(f)
-    # Keep only per-grid tables; the old single-cache format (scalar keys
-    # directly under [grid_size]) is discarded so the rewrite below is
-    # well-formed
+    # Keep only per-grid tables; the old single-cache format is discarded
     manifest["grid_size"] = {
         grid_id: grid
         for grid_id, grid in manifest.get("grid_size", {}).items()

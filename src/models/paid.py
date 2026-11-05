@@ -64,10 +64,7 @@ class PhysUNet2D(nnx.Module):
         ## PDE solver constants
         self.t_span = t_span
         self.condition = condition
-        # The ODE solve covers only the denoised region: it starts from the
-        # last clean frame (k-1, so the first saved frame is k; frame 0 when
-        # k = 0) and saves the generated frames k..window-1. The condition
-        # frames are prepended from the input afterwards.
+        # The solve covers only the denoised region, inited from the last clean frame
         cond_idx = condition - 1 if condition > 0 else 0
         self.t0 = float(t_span[cond_idx])
         self.t1 = t1
@@ -77,19 +74,13 @@ class PhysUNet2D(nnx.Module):
         self.pde_dim = pde_dim
         self.time_dim = time_dim
         self.data_dim = num_grid_points * time_dim
-        # Diffusion step embedding width; decoupled from data_dim so the
-        # embedding MLP and head inputs stay small (and grids like burgers
-        # cannot silently explode the parameter count)
+        # Embedding width decoupled from data_dim so large grids stay small
         self.embed_dim = embed_dim
 
         self.physics_model = physics_model
         self.solver = solver
 
-        # Out-ODE readout map g: applied to the generated series identically
-        # for every combination (ungated readout, never policed by the
-        # discrepancy regulariser). "linear" acts across the snapshot
-        # dimension only (num_grid_points -> num_grid_points per frame, no
-        # time mixing).
+        # Ungated per-frame readout on the snapshot axis, never policed by the discrepancy regulariser
         assert map in ("identity", "linear"), f"Unknown out-ODE map: {map}"
         self.out_map = (
             nnx.Linear(self.num_grid_points, self.num_grid_points, rngs=rngs)
@@ -149,8 +140,7 @@ class PhysUNet2D(nnx.Module):
                     rngs=rngs,
                 ),
                 nnx.sigmoid,
-                # Rescale by the exact configured range; defaults bound so each
-                # closure captures its own (lo, hi) rather than the loop vars
+                # Rescale by the configured range; the closure captures its own (lo, hi)
                 lambda x, lo=min, hi=max: x * (hi - lo) + lo,
             )
             self.phys_funcs.append(phys_func)
@@ -330,8 +320,7 @@ class PhysUNet2D(nnx.Module):
             # ys_dot: (B*n, X*D)
             return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.pde_dim))
 
-        # init_cond : ^(B*n, X*D) from the last clean frame (frame 0 when
-        # the condition is empty)
+        # init_cond : ^(B*n, X*D) from the last clean frame
         cond_idx = self.condition - 1 if self.condition > 0 else 0
         init_cond = jnp.tile(
             jnp.pad(
@@ -356,8 +345,7 @@ class PhysUNet2D(nnx.Module):
 
         # ^(T, B*n, X)
         y_phys = y_seq[:, :, : self.num_grid_points]
-        # Ungated readout: the map acts on the snapshot axis (last) of every
-        # frame, identically for all combinations
+        # Ungated readout on the snapshot axis, identical for all combinations
         if self.out_map is not None:
             y_phys = self.out_map(y_phys)
 
@@ -521,9 +509,7 @@ class PAID(nnx.Module):
         self.aug_reg = aug_reg
 
         # Physics constants + functions
-        # The PDE system is defined by dataset_config: the data is generated
-        # on an even x_grid x t_grid discretisation of a length x time domain,
-        # so the frame step is derived here rather than configured separately.
+        # The PDE frame step derives from dataset_config, the data's grid
         self.integral_level = pde["integral_level"]
         assert condition > 1, (
             f"Condition must be greater than 1, received {condition}. With a "
@@ -532,9 +518,7 @@ class PAID(nnx.Module):
         )
         self.condition = condition
 
-        # Generation length: the number of frames PAID denoises past the
-        # condition. Legacy configs without gen_steps fall back to
-        # t_grid - condition so the window still covers the whole sample.
+        # Frames denoised past the condition; legacy configs fall back to t_grid - condition
         self.time_dim = pde.get("gen_steps", t_grid - self.condition)
         assert self.time_dim > 0, (
             f"Generation length must be positive, received {self.time_dim}. "
@@ -547,10 +531,7 @@ class PAID(nnx.Module):
         frame_dt = time / float(t_grid)
         self.dt = frame_dt / float(self.integral_level)
         self.t_span = jnp.arange(self.window) * frame_dt
-        # Final solve time taken from the span itself (kept as a Python float
-        # so it stays concrete under jit); deriving it arithmetically can
-        # round below the last float32 span value and diffrax rejects saveat
-        # points outside [t0, t1]
+        # t1 from the span itself so float32 rounding cannot push saveat points outside [t0, t1]
         self.t1 = float(self.t_span[-1])
 
         self.num_grid_points = x_grid
@@ -669,8 +650,7 @@ class PAID(nnx.Module):
 
         x_0 = jax.lax.fori_loop(0, num_steps, ddim_step, x_t)
 
-        # Coefficient estimate: noise the sample back one step and read the
-        # embedder's physics parameters at tau = 1
+        # Coefficient: noise the sample back one step and read the embedder at tau = 1
         key, noise_key = jax.random.split(key)
         alpha_1 = alphas[1]
         x_1 = x_0 * jnp.sqrt(alpha_1) + jax.random.normal(

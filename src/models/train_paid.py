@@ -139,7 +139,7 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
     # (m, B, T, X, 1), (B, window, X, 1), (B, Z)
     x_hat, phys_pred, phys_params = model.denoiser.full_forward(x, tau)
 
-    # x_hat[-1] is the generated region u[k:T+k]; the conditioned frames are
+    # x_hat[-1] is the generated region u[k:T+k]; the condition frames are
     # fed clean and left out of the loss entirely
     reconstruction_loss = (
         jnp.square(data[:, model.condition :] - x_hat[-1])
@@ -147,11 +147,8 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
         .mean()
     )
 
-    # Pure physics trajectory over the full window, parameterised by the
-    # model's own coefficient estimates; the unmixer is pushed towards the
-    # physics implied by them. No alpha weighting: the single-step denoise is
-    # hardest at high tau and weighting by alpha would down-weight exactly
-    # those cases.
+    # Pure physics trajectory over the full window; no alpha weighting as
+    # the single-step denoise is hardest at high tau
     phys_traj = model.generate_physics(
         phys_params, data[:, 0].reshape(-1, model.num_grid_points)
     )
