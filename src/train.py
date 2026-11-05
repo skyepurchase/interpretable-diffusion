@@ -15,6 +15,7 @@ from jax.random import split
 from datasets import DATASETS
 from datasets.loader import ArrayLoader
 from models import LOSS_FNS, LOSS_LABELS, MODELS
+from models.paid import PAID
 from utils import load_config
 
 
@@ -81,6 +82,9 @@ def train(
         rngs=rngs,
     )
 
+    # PAID denoises past its condition; slice batches to its window
+    window = model.window if isinstance(model, PAID) else None
+
     # Get loss function and loss labels
     loss_fn = LOSS_FNS[config["model"]]
     loss_labels = LOSS_LABELS[config["model"]]
@@ -104,8 +108,6 @@ def train(
         )
     optimizer = nnx.Optimizer(model, gradient_transform, wrt=nnx.Param)
 
-    # Generic train step over the model's loss function; the validation step
-    # calls the loss directly so no gradients or optimizer updates occur
     @nnx.jit
     def train_step(
         model: nnx.Module, data: jax.Array, optimizer: nnx.Optimizer, key: jax.Array
@@ -120,10 +122,6 @@ def train(
     # and the total loss itself for vae and ddim
     val_rec_idx = 1 if config["model"] in ("phys_vae", "paid") else 0
 
-    # Best-validation checkpointing; each improvement is saved asynchronously
-    # to an incrementing id folder so no save waits on another. The arena holds
-    # the checkpointers and their ids so the folders can be removed once the
-    # best state has been restored
     val_ckpt_dir = os.path.join(config["checkpoint_dir"], "val-checkpoint")
     os.makedirs(val_ckpt_dir, exist_ok=True)
     checkpointers: list[tuple[ocp.AsyncCheckpointer, int]] = []
@@ -153,6 +151,8 @@ def train(
             else train_loader
         )
         for batch, _ in train_pbar:
+            if window is not None:
+                batch = batch[:, :window]
             key, train_key = split(key, num=2)
             losses = train_step(
                 model=model, data=batch, optimizer=optimizer, key=train_key
@@ -175,6 +175,8 @@ def train(
             else val_loader
         )
         for batch, _ in val_pbar:
+            if window is not None:
+                batch = batch[:, :window]
             key, val_key = split(key, num=2)
             losses = val_step(model=model, data=batch, key=val_key)[1]
 
@@ -216,8 +218,7 @@ def train(
     end = time.perf_counter()
     train_time = end - start
 
-    # Wait on the outstanding val-checkpoint saves, restore the best state
-    # (the latest improvement), and remove the id folders to stay clean
+    # Wait on the outstanding saves
     for checkpointer, _ in checkpointers:
         checkpointer.wait_until_finished()
 

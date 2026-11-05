@@ -1,4 +1,5 @@
 import os
+import tomllib
 from typing import Callable
 
 import jax
@@ -9,9 +10,6 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from datasets.loader import ArrayLoader
 
-# Fixed dataset generation seed. Hardcoded (not exposed in configs) so the
-# generated dataset is always identical regardless of when or how often it
-# is created.
 GENERATION_SEED = 169800
 
 
@@ -63,6 +61,7 @@ def generate_pendulum_data(
     t_grid: int = 50,
     x_grid: int = 1,
     time: float = 2.5,
+    length: float = 0.0,
     phys_param_ranges: tuple = (
         (jnp.pi / 4, jnp.pi),  # omega
         (0.0, 0.8),  # xi
@@ -94,8 +93,8 @@ def generate_pendulum_data(
     omega : (B, 1)
         The angular velocity of each sample.
     """
-    t = jnp.linspace(0, time, t_grid)
-    dt = t[1] - t[0]
+    dt = time / t_grid
+    t = jnp.arange(t_grid) * dt
 
     init_key, omega_key, xi_key, phi_key, amp_key, key = jax.random.split(key, num=6)
 
@@ -234,8 +233,8 @@ def generate_diffusion_data(
     diff_coeff : (B, 1)
         The diffusion coefficient of each sample.
     """
-    t = jnp.linspace(0, time, t_grid)
-    dt = t[1] - t[0]
+    dt = time / t_grid
+    t = jnp.arange(t_grid) * dt
 
     s = jnp.linspace(0, length, x_grid)
     ds = s[1] - s[0]
@@ -377,8 +376,8 @@ def generate_burgers_data(
     phys_param : (B, 1)
         The viscosity parameter of each sample.
     """
-    t = jnp.linspace(0, time, t_grid)
-    dt = t[1] - t[0]
+    dt = time / t_grid
+    t = jnp.arange(t_grid) * dt
     s = jnp.linspace(0, length, x_grid, endpoint=False)
     ds = s[1] - s[0]
 
@@ -460,19 +459,62 @@ def get_pivae(
     """
     assert test_split + validation_split + train_split <= n_samples
 
-    if not all(
-        [
-            os.path.exists(os.path.join(dir, system, file))
-            for file in [
-                "test.npy",
-                "test_coeff.npy",
-                "val.npy",
-                "val_coeff.npy",
-                "train_pool.npy",
-                "train_coeff.npy",
-            ]
-        ]
-    ):
+    system_dir = os.path.join(dir, system)
+    manifest_path = os.path.join(system_dir, "manifest.toml")
+    splits = (
+        "test",
+        "test_coeff",
+        "val",
+        "val_coeff",
+        "train_pool",
+        "train_coeff",
+    )
+
+    # The manifest holds one [grid_size.<t_grid>] section per cache
+    manifest = {}
+    if os.path.exists(manifest_path):
+        with open(manifest_path, "rb") as f:
+            manifest = tomllib.load(f)
+    manifest["grid_size"] = {
+        grid_id: grid
+        for grid_id, grid in manifest.get("grid_size", {}).items()
+        if isinstance(grid, dict)
+    }
+
+    entry = manifest["grid_size"].get(str(t_grid), {})
+    files = entry.get("files", {})
+    cache_valid = (
+        bool(entry)
+        and entry.get("x_grid") == x_grid
+        and entry.get("time") == time
+        and all(
+            role in files and os.path.exists(os.path.join(system_dir, files[role]))
+            for role in splits
+        )
+    )
+
+    if cache_valid:
+        test = jnp.load(os.path.join(system_dir, files["test"]))
+        test_coeff = jnp.load(os.path.join(system_dir, files["test_coeff"]))
+        validation = jnp.load(os.path.join(system_dir, files["val"]))
+        val_coeff = jnp.load(os.path.join(system_dir, files["val_coeff"]))
+        train_pool = jnp.load(os.path.join(system_dir, files["train_pool"]))
+        train_coeff = jnp.load(os.path.join(system_dir, files["train_coeff"]))
+
+        assert test.shape == (test_split, x_grid, t_grid), (
+            f"Loaded test set has shape {test.shape} expected {(test_split, x_grid, t_grid)} according to config"
+        )
+        assert validation.shape == (validation_split, x_grid, t_grid), (
+            f"Loaded validation set has shape {validation.shape} expected {(validation_split, x_grid, t_grid)} according to config"
+        )
+        assert (
+            train_pool.shape[-1] == t_grid
+            and train_pool.shape[1] == x_grid
+            and train_pool.shape[0] >= train_split
+        ), (
+            f"Loaded train set has shape {train_pool.shape} expected at least {(train_split, x_grid, t_grid)} according to config"
+        )
+    else:
         print("\nGenerating samples...")
 
         sample_key = jax.random.key(GENERATION_SEED)
@@ -501,46 +543,43 @@ def get_pivae(
         train_pool = samples[test_split + validation_split :]
         train_coeff = coeffs[test_split + validation_split :]
 
-        if not os.path.isdir(os.path.join(dir, system)):
-            os.makedirs(os.path.join(dir, system))
+        if not os.path.isdir(system_dir):
+            os.makedirs(system_dir)
 
         print("\nSaving generated dataset...")
 
-        jnp.save(os.path.join(dir, system, "test"), test, allow_pickle=False)
-        jnp.save(
-            os.path.join(dir, system, "test_coeff"), test_coeff, allow_pickle=False
-        )
-        jnp.save(os.path.join(dir, system, "val"), validation, allow_pickle=False)
-        jnp.save(os.path.join(dir, system, "val_coeff"), val_coeff, allow_pickle=False)
-        jnp.save(
-            os.path.join(dir, system, "train_pool"),
-            train_pool,
-            allow_pickle=False,
-        )
-        jnp.save(
-            os.path.join(dir, system, "train_coeff"), train_coeff, allow_pickle=False
-        )
-    else:
-        test = jnp.load(os.path.join(dir, system, "test.npy"))
-        test_coeff = jnp.load(os.path.join(dir, system, "test_coeff.npy"))
-        validation = jnp.load(os.path.join(dir, system, "val.npy"))
-        val_coeff = jnp.load(os.path.join(dir, system, "val_coeff.npy"))
-        train_pool = jnp.load(os.path.join(dir, system, "train_pool.npy"))
-        train_coeff = jnp.load(os.path.join(dir, system, "train_coeff.npy"))
+        arrays = {
+            "test": test,
+            "test_coeff": test_coeff,
+            "val": validation,
+            "val_coeff": val_coeff,
+            "train_pool": train_pool,
+            "train_coeff": train_coeff,
+        }
+        for role, array in arrays.items():
+            jnp.save(
+                os.path.join(system_dir, f"{role}_{t_grid}"),
+                array,
+                allow_pickle=False,
+            )
 
-        assert test.shape == (test_split, x_grid, t_grid), (
-            f"Loaded test set has shape {test.shape} expected {(test_split, x_grid, t_grid)} according to config"
-        )
-        assert validation.shape == (validation_split, x_grid, t_grid), (
-            f"Loaded validation set has shape {validation.shape} expected {(validation_split, x_grid, t_grid)} according to config"
-        )
-        assert (
-            train_pool.shape[-1] == t_grid
-            and train_pool.shape[1] == x_grid
-            and train_pool.shape[0] >= train_split
-        ), (
-            f"Loaded train set has shape {train_pool.shape} expected at least {(train_split, x_grid, t_grid)} according to config"
-        )
+        manifest["grid_size"][str(t_grid)] = {
+            "x_grid": x_grid,
+            "time": time,
+            "files": {role: f"{role}_{t_grid}.npy" for role in splits},
+        }
+        lines = []
+        for grid_id, grid in manifest["grid_size"].items():
+            lines.append(f"[grid_size.{grid_id}]")
+            lines.append(f"x_grid = {grid['x_grid']}")
+            lines.append(f"time = {grid['time']!r}")
+            lines.append("")
+            lines.append(f"[grid_size.{grid_id}.files]")
+            for role, name in grid["files"].items():
+                lines.append(f'{role} = "{name}"')
+            lines.append("")
+        with open(manifest_path, "w") as f:
+            f.write("\n".join(lines).rstrip() + "\n")
 
     perm_key, key = jax.random.split(key)
     train_perm = jax.random.permutation(perm_key, jnp.arange(train_pool.shape[0]))[

@@ -45,6 +45,7 @@ class PhysUNet2D(nnx.Module):
         num_grid_points: int,
         pde_dim: int,
         time_dim: int,
+        condition: int,
         physics_model: Operator,
         solver: Callable[[], AbstractSolver],
         rngs: nnx.Rngs,
@@ -61,26 +62,22 @@ class PhysUNet2D(nnx.Module):
         )
 
         ## PDE solver constants
-        self.t_span = t_span
+        self.condition = condition
+        # The solve covers only the denoised region
+        cond_idx = condition - 1 if condition > 0 else 0
+        self.t0 = float(t_span[cond_idx])
         self.t1 = t1
+        self.solve_span = t_span[condition:]
         self.dt = dt
         self.num_grid_points = num_grid_points
         self.pde_dim = pde_dim
         self.time_dim = time_dim
         self.data_dim = num_grid_points * time_dim
-        # Diffusion step embedding width; decoupled from data_dim so the
-        # embedding MLP and head inputs stay small (and grids like burgers
-        # cannot silently explode the parameter count)
         self.embed_dim = embed_dim
 
         self.physics_model = physics_model
         self.solver = solver
 
-        # Out-ODE readout map g: applied to the generated series identically
-        # for every combination (ungated readout, never policed by the
-        # discrepancy regulariser). "linear" acts across the snapshot
-        # dimension only (num_grid_points -> num_grid_points per frame, no
-        # time mixing).
         assert map in ("identity", "linear"), f"Unknown out-ODE map: {map}"
         self.out_map = (
             nnx.Linear(self.num_grid_points, self.num_grid_points, rngs=rngs)
@@ -140,8 +137,6 @@ class PhysUNet2D(nnx.Module):
                     rngs=rngs,
                 ),
                 nnx.sigmoid,
-                # Rescale by the exact configured range; defaults bound so each
-                # closure captures its own (lo, hi) rather than the loop vars
                 lambda x, lo=min, hi=max: x * (hi - lo) + lo,
             )
             self.phys_funcs.append(phys_func)
@@ -254,6 +249,8 @@ class PhysUNet2D(nnx.Module):
         phys_x_hat : Array (m, B, X*T)
             The estimated clean sample incorporating physics knowledge
         """
+        if x.ndim == 3:
+            x = jnp.expand_dims(x, -1)
 
         if pre_selections is None or post_selections is None:
             assert pre_combs == 1 and post_combs == 1, (
@@ -320,38 +317,44 @@ class PhysUNet2D(nnx.Module):
             return jnp.reshape(ys_dot_phys + ys_dot_aux, (-1, self.pde_dim))
 
         # init_cond : ^(B*n, X*D)
+        cond_idx = self.condition - 1 if self.condition > 0 else 0
         init_cond = jnp.tile(
             jnp.pad(
-                x[:, 0].reshape(-1, self.num_grid_points),
+                x[:, cond_idx].reshape(-1, self.num_grid_points),
                 ((0, 0), (0, self.pde_dim - self.num_grid_points)),
             ),
             reps=(pre_combs, 1),
         )
 
-        # y_seq : ^(T, B*n, X*D)
+        # y_seq : ^(T, B*n, X*D) -- only the denoised frames k..window-1
         y_seq = diffeqsolve(
             ODETerm(PDE),
             self.solver(),
-            t0=0.0,
+            t0=self.t0,
             t1=self.t1,
             dt0=self.dt,
             y0=init_cond,
             args=phys_params,
-            saveat=SaveAt(ts=self.t_span),
+            saveat=SaveAt(ts=self.solve_span),
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
 
         # ^(T, B*n, X)
         y_phys = y_seq[:, :, : self.num_grid_points]
-        # Ungated readout: the map acts on the snapshot axis (last) of every
-        # frame, identically for all combinations
         if self.out_map is not None:
             y_phys = self.out_map(y_phys)
 
-        # ^(n, B, X*T)
+        # Prepend the condition frames from the input: ^(window, B*n, X)
+        cond_frames = jnp.tile(
+            jnp.permute_dims(x[:, : self.condition, :, 0], (1, 0, 2)),
+            reps=(1, pre_combs, 1),
+        )
+        y_full = jnp.concatenate([cond_frames, y_phys], axis=0)
+
+        # ^(n, B, X*window)
         phys_x_hat = jnp.reshape(
-            # ^(T, B*n, X) => ^(B*n, T, X)
-            jnp.permute_dims(y_phys, (1, 0, 2)),
+            # ^(window, B*n, X) => ^(B*n, window, X)
+            jnp.permute_dims(y_full, (1, 0, 2)),
             (pre_combs, -1, self.data_dim),
         )
 
@@ -502,16 +505,29 @@ class PAID(nnx.Module):
         self.aug_reg = aug_reg
 
         # Physics constants + functions
-        # The PDE system is defined by dataset_config: the data is generated
-        # on an even x_grid x t_grid discretisation of a length x time domain,
-        # so the frame step is derived here rather than configured separately.
         self.integral_level = pde["integral_level"]
-        self.time_dim = t_grid
+        assert condition > 1, (
+            f"Condition must be greater than 1, received {condition}. With a "
+            "single condition frame the model cannot reason about the "
+            "behaviour of the auxiliary functions."
+        )
+        self.condition = condition
 
-        frame_dt = time / float(t_grid - 1)
+        # Frames denoised past the condition
+        gen_steps = pde.get("gen_steps", t_grid - self.condition)
+        assert gen_steps > 0, (
+            f"Generation length must be positive, received {gen_steps}. "
+            "Legacy configs derive it as t_grid - condition; add pde.gen_steps "
+            "when the condition equals or exceeds t_grid."
+        )
+        # The denoiser sees the condition frames plus the generated frames
+        self.window = gen_steps + self.condition
+
+        frame_dt = time / float(t_grid)
         self.dt = frame_dt / float(self.integral_level)
-        self.t1 = (self.time_dim - 1) * self.dt
-        self.t_span = jnp.linspace(0.0, self.t1, self.time_dim)
+        self.t_span = jnp.arange(self.window) * frame_dt
+        # avoid rounding saveat points outside [t0, t1]
+        self.t1 = float(self.t_span[-1])
 
         self.num_grid_points = x_grid
         ds = 0.0
@@ -539,7 +555,8 @@ class PAID(nnx.Module):
             self.dt,
             self.num_grid_points,
             self.pde_dim,
-            self.time_dim,
+            self.window,
+            self.condition,
             self.physics_model,
             self.solver,
             embed_dim=embed_dim,
@@ -548,7 +565,6 @@ class PAID(nnx.Module):
         )
 
         # Additional constants
-        self.condition = condition
         self.jump = jump
         self.phys_param_ranges = pde["phys_param_ranges"]
         self.pad = pad
@@ -629,8 +645,7 @@ class PAID(nnx.Module):
 
         x_0 = jax.lax.fori_loop(0, num_steps, ddim_step, x_t)
 
-        # Coefficient estimate: noise the sample back one step and read the
-        # embedder's physics parameters at tau = 1
+        # Coefficient: noise the sample back one step and read the embedder at tau = 1
         key, noise_key = jax.random.split(key)
         alpha_1 = alphas[1]
         x_1 = x_0 * jnp.sqrt(alpha_1) + jax.random.normal(
@@ -647,7 +662,12 @@ class PAID(nnx.Module):
 
     def generate_physics(self, params: list[jax.Array], init_y: jax.Array) -> jax.Array:
         """
-        TODO: generate docstring
+        Solve the pure physics model over the full window.
+
+        The solve starts at t0 = 0 from the given initial condition and saves
+        the entire trajectory u[0:T+k]. Both the physics loss (unmixer output
+        vs this trajectory) and the augmentation loss (phys_funcs trained on
+        it) compare against the full window.
 
         Parameters
         ----------
@@ -658,16 +678,16 @@ class PAID(nnx.Module):
 
         Returns
         -------
-        gen_phys : Array (B, X*T)
-            Physics generated by the provided parameters
+        gen_phys : Array (B, X*window)
+            Physics trajectory generated by the provided parameters
         """
-        # init_cond : ^(B*n, X*D)
+        # init_cond : ^(B, X*D)
         init_cond = jnp.pad(
             init_y,
             ((0, 0), (0, self.pde_dim - self.num_grid_points)),
         )
 
-        # y_seq : ^(T, B, X*D)
+        # y_seq : ^(window, B, X*D)
         y_seq = diffeqsolve(
             ODETerm(self.physics_model),
             self.solver(),
@@ -680,11 +700,11 @@ class PAID(nnx.Module):
         ).ys
         assert y_seq is not None, "Failed to solve PDE"
 
-        # ^(B, X*T)
+        # ^(B, X*window)
         gen_phys = jnp.reshape(
-            # ^(T, B, X*D) => ^(B, X*T)
+            # ^(window, B, X*D) => ^(B, X*window)
             jnp.permute_dims(y_seq[:, :, : self.num_grid_points], (1, 0, 2)),
-            (-1, self.time_dim * self.num_grid_points),
+            (-1, self.window * self.num_grid_points),
         )
 
         return gen_phys

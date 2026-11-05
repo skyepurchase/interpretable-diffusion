@@ -27,6 +27,11 @@ def evaluate(
     assert isinstance(model, (PAID, PhysVAE)), f"{type(model)} is not supported."
     model.eval()
 
+    if isinstance(model, PAID):
+        window, condition = model.window, model.condition
+    else:
+        window, condition = None, 0
+
     forecast_mae = None
     coeff_mae = jnp.zeros((0, 1))
     if progress:
@@ -36,14 +41,19 @@ def evaluate(
     else:
         pbar = testloader
     for batch, coeffs in pbar:
+        if window is not None:
+            batch = batch[:, :window]
         gen_key, key = jax.random.split(key)
         forecast, coeff_pred = model(batch, gen_key)
 
         if forecast_mae is None:
-            forecast_mae = jnp.absolute(forecast - batch)
+            forecast_mae = jnp.absolute(forecast[:, condition:] - batch[:, condition:])
         else:
             forecast_mae = jnp.concatenate(
-                [forecast_mae, jnp.absolute(forecast - batch)]
+                [
+                    forecast_mae,
+                    jnp.absolute(forecast[:, condition:] - batch[:, condition:]),
+                ]
             )
         coeff_mae = jnp.concatenate([coeff_mae, jnp.absolute(coeff_pred - coeffs)])
 

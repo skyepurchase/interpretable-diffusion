@@ -138,25 +138,21 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
 
     # (m, B, T, X, 1), (B, T, X, 1), (B, Z)
     x_hat, phys_pred, phys_params = model.denoiser.full_forward(x, tau)
-    phys_gen = x_hat[0]
 
     reconstruction_loss = (
-        # Only train on the noised generation; the conditioned frames are fed
-        # clean and are left out of the loss entirely
+        # Only the noised generation; the condition frames are left out of the loss
         jnp.square(data[:, model.condition :] - x_hat[-1][:, model.condition :])
         .sum(axis=tuple(range(1, data.ndim)))
         .mean()
     )
 
-    phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen)).sum(axis=-1)
+    phys_traj = model.generate_physics(
+        phys_params, data[:, 0].reshape(-1, model.num_grid_points)
+    )
+    phys_traj = jnp.reshape(phys_traj, phys_pred.shape)
+    phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_traj)).sum(axis=-1)
     phys_loss = (
-        model.phys_reg
-        * (
-            phys_error[:, : model.condition].sum(axis=tuple(range(1, data.ndim - 1)))
-            + (
-                jnp.reshape(alpha, alpha_shape[:-1]) * phys_error[:, model.condition :]
-            ).sum(axis=tuple(range(1, data.ndim - 1)))
-        ).mean()
+        model.phys_reg * phys_error.sum(axis=tuple(range(1, data.ndim - 1))).mean()
     )
 
     disc_loss = model.disc_reg * discrepancy_loss(x_hat)

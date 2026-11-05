@@ -6,5 +6,5 @@ for seed in ${seeds[@]}; do
     uv run src/sweep.py \
         --config configs/pendulum_paid/condition_base.yaml \
         --seed $seed \
-        --conditions 2 5 10 25 49
+        --conditions 2 5 10 25 50
 done
