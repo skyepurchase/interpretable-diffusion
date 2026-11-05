@@ -551,6 +551,9 @@ class PhysVAE(nnx.Module):
         The solver substeps per output frame
     ode_solver : str
         The ODE solver name
+    time_dim : int | None
+        Number of frames the model operates on; None uses the full dataset
+        window (t_grid)
     kl_balance : float
         The weight of the KL divergence relative to the reconstruction
     alpha : float
@@ -579,6 +582,7 @@ class PhysVAE(nnx.Module):
         beta: float,
         gamma: float,
         dataset_config: dict,
+        time_dim: int | None = None,
         *,
         rngs: nnx.Rngs,
     ) -> None:
@@ -590,10 +594,14 @@ class PhysVAE(nnx.Module):
 
         self.integral_level = integral_level
 
+        # Number of frames the model operates on; defaults to the full
+        # dataset window (legacy behaviour)
+        self.time_dim = time_dim if time_dim is not None else t_grid
+
         # The data's frame step follows from the dataset definition
         frame_dt = time / float(t_grid)
 
-        self.integral_len = (t_grid - 1) * self.integral_level + 1
+        self.integral_len = (self.time_dim - 1) * self.integral_level + 1
         self.integral_step = frame_dt / float(integral_level)
 
         self.t_span = jnp.linspace(
@@ -605,21 +613,21 @@ class PhysVAE(nnx.Module):
         self.num_grid_points = x_grid
         _, num_phys_params, num_derivatives = get_physics_model(system)
         self.ode_dim = self.num_grid_points * num_derivatives
-        self.data_dim = self.num_grid_points * t_grid
+        self.data_dim = self.num_grid_points * self.time_dim
 
-        assert len(range(0, self.integral_len, self.integral_level)) == t_grid, (
-            f"Time dimension and integral steps not compatible {len(range(0, self.integral_len, self.integral_level))} != {t_grid}"
+        assert len(range(0, self.integral_len, self.integral_level)) == self.time_dim, (
+            f"Time dimension and integral steps not compatible {len(range(0, self.integral_len, self.integral_level))} != {self.time_dim}"
         )
 
         self.encode = PhysEncoder(
-            **encoder, num_grid_points=x_grid, time_dim=t_grid, rngs=rngs
+            **encoder, num_grid_points=x_grid, time_dim=self.time_dim, rngs=rngs
         )
         self.decode = PhysDecoder(
             **decoder,
             t1=self.t_final,
             dt=self.integral_step,
             L=length,
-            time_dim=t_grid,
+            time_dim=self.time_dim,
             num_grid_points=x_grid,
             integral_level=integral_level,
             t_span=self.t_span,
