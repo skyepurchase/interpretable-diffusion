@@ -3,7 +3,6 @@ from argparse import ArgumentParser
 from datetime import datetime
 
 import jax
-import trackio
 from flax import nnx
 from jaxtyping import PRNGKeyArray
 
@@ -23,7 +22,7 @@ def sweep_conditions(
     checkpoint_dir: str,
     run_base: str,
     rngs: nnx.Rngs,
-    local: bool = False,
+    progress: bool = False,
     *,
     key: PRNGKeyArray,
 ):
@@ -48,11 +47,20 @@ def sweep_conditions(
         Base run name
     rngs : nnx.Rngs
         Flax random number generators for model initialization
-    local : bool
-        Whether to output information locally
+    progress : bool
+        Whether to show progress bars and log metrics to trackio
     key : PRNGKeyArray
         PRNG key for reproducibility during training
     """
+    if progress:
+        try:
+            import trackio
+        except ImportError as err:
+            raise SystemExit(
+                "trackio is not installed; install the dashboard extra with "
+                "`uv sync --extra dashboard`"
+            ) from err
+
     for condition in conditions:
         print(f"\nTRAINING WITH CONDITION PERIOD k={condition}\n")
 
@@ -65,22 +73,23 @@ def sweep_conditions(
         run_name = f"{run_base}_{stamp}_{condition}"
 
         # Initialize trackio for this condition
-        trackio.init(
-            project="Interpretable Diffusion",
-            name=run_name,
-            config={
-                "condition": condition,
-                "model": model_name,
-                "dataset": config.get("dataset", "pivae"),
-                **config.get("trainer_config", {}),
-            },
-        )
+        if progress:
+            trackio.init(
+                project="Interpretable Diffusion",
+                name=run_name,
+                config={
+                    "condition": condition,
+                    "model": model_name,
+                    "dataset": config.get("dataset", "pivae"),
+                    **config.get("trainer_config", {}),
+                },
+            )
 
         # Split key for this condition
         key, subkey = jax.random.split(key)
 
         # Run training with rngs
-        result = train(config, rngs=rngs, local=local, key=subkey)
+        result = train(config, rngs=rngs, progress=progress, key=subkey)
 
         # Save model
         print("\nSaving model...")
@@ -95,7 +104,8 @@ def sweep_conditions(
             f" Train time: {result.train_time:.2f}s"
         )
 
-        trackio.finish()
+        if progress:
+            trackio.finish()
 
 
 if __name__ == "__main__":
@@ -109,7 +119,7 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument("-s", "--seed", type=int, help="seed for the run", default=0)
-    parser.add_argument("--local", action="store_true")
+    parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
     config = load_config(args.config)
     print("\nConfig loaded.")
@@ -142,6 +152,6 @@ if __name__ == "__main__":
         checkpoint_dir=config["checkpoint_dir"],
         run_base=run_name,
         rngs=rngs,
-        local=args.local,
+        progress=args.progress,
         key=key,
     )

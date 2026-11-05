@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import PRNGKeyArray
-from tqdm import tqdm
 
 from datasets.loader import ArrayLoader
 from models.paid import PAID
@@ -13,7 +12,7 @@ from utils import load_config
 def evaluate(
     model: nnx.Module,
     testloader: ArrayLoader,
-    local: bool = False,
+    progress: bool = False,
     *,
     key: PRNGKeyArray,
 ):
@@ -30,7 +29,12 @@ def evaluate(
 
     forecast_mae = None
     coeff_mae = jnp.zeros((0, 1))
-    pbar = tqdm(testloader, desc="Evaluating") if local else testloader
+    if progress:
+        from tqdm import tqdm
+
+        pbar = tqdm(testloader, desc="Evaluating")
+    else:
+        pbar = testloader
     for batch, coeffs in pbar:
         gen_key, key = jax.random.split(key)
         forecast, coeff_pred = model(batch, gen_key)
@@ -64,7 +68,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-s", "--seed", type=int, help="the seed for the run", default=0
     )
-    parser.add_argument("--local", action="store_true")
+    parser.add_argument("--progress", action="store_true")
 
     args = parser.parse_args()
     config = load_config(args.config)
@@ -85,7 +89,7 @@ if __name__ == "__main__":
         **config["dataset_config"], key=data_key
     )
 
-    forecast, coeff = evaluate(model, test_loader, args.local, key=key)
+    forecast, coeff = evaluate(model, test_loader, args.progress, key=key)
 
     print()
     print(f"\nForecast error: {forecast:.2E}, coefficient error: {coeff:.2E}")

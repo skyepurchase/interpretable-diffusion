@@ -9,10 +9,8 @@ from datetime import datetime
 import jax
 import optax
 import orbax.checkpoint as ocp
-import trackio
 from flax import nnx
 from jax.random import split
-from tqdm import tqdm
 
 from datasets import DATASETS
 from datasets.loader import ArrayLoader
@@ -47,7 +45,7 @@ def format_time(seconds: float) -> str:
 def train(
     config: dict,
     rngs: nnx.Rngs,
-    local: bool = False,
+    progress: bool = False,
     *,
     key: jax.Array,
 ) -> TrainResult:
@@ -60,8 +58,8 @@ def train(
         Full configuration dictionary with dataset, model, model_config, trainer_config
     rngs : nnx.Rngs
         Flax random number generators for model initialization
-    local : bool = False
-        Whether the program should output information
+    progress : bool = False
+        Whether to show progress bars and log metrics to trackio
     key : jax.Array
         PRNG key for reproducibility during training
 
@@ -136,7 +134,12 @@ def train(
     best_loss = float("inf")
     best_epoch = 0
 
-    pbar = tqdm(range(epochs)) if local else range(epochs)
+    if progress:
+        from tqdm import tqdm
+
+        pbar = tqdm(range(epochs))
+    else:
+        pbar = range(epochs)
 
     print("\nStarting training steps...\n")
 
@@ -146,7 +149,7 @@ def train(
 
         train_pbar = (
             tqdm(train_loader, desc="Train batches", leave=False)
-            if local
+            if progress
             else train_loader
         )
         for batch, _ in train_pbar:
@@ -168,7 +171,7 @@ def train(
         model.eval()
         val_pbar = (
             tqdm(val_loader, desc="Validation batches", leave=False)
-            if local
+            if progress
             else val_loader
         )
         for batch, _ in val_pbar:
@@ -185,7 +188,10 @@ def train(
         model.train()
 
         # Log metrics per epoch (trackio is global singleton, assumed initialized by caller)
-        trackio.log(running_loss)
+        if progress:
+            import trackio
+
+            trackio.log(running_loss)
 
         if best_loss >= running_loss["val_reconstruction"]:
             best_loss = running_loss["val_reconstruction"]
@@ -199,7 +205,7 @@ def train(
             checkpointers.append((checkpointer, ckpt_id))
             ckpt_id += 1
 
-        if local:
+        if progress:
             assert isinstance(pbar, tqdm)
             pbar.set_description(
                 f"Training, loss={running_loss['loss']:.2E}, val_loss={running_loss['val_loss']:.2E}"
@@ -239,7 +245,7 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-c", "--config", help="path to config file", required=True)
     parser.add_argument("-s", "--seed", type=int, help="seed for the run", default=0)
-    parser.add_argument("--local", action="store_true")
+    parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
     config = load_config(args.config)
     print("\nConfig loaded.")
@@ -247,7 +253,6 @@ if __name__ == "__main__":
     key = jax.random.key(args.seed)
     rngs = nnx.Rngs(args.seed)
 
-    # Initialize trackio for standalone execution
     stamp = datetime.now().strftime("%m%d-%H%M")
     run_name = "_".join(
         [
@@ -266,19 +271,28 @@ if __name__ == "__main__":
     )
     batch_size = next(iter(train_loader_temp))[0].shape[0]
 
-    trackio.init(
-        project="Interpretable Diffusion",
-        name=run_name,
-        config={
-            "epochs": config["trainer_config"]["epochs"],
-            "learning_rate": config["trainer_config"]["learning_rate"],
-            "batch_size": batch_size,
-        },
-    )
+    if args.progress:
+        try:
+            import trackio
+        except ImportError as err:
+            raise SystemExit(
+                "trackio is not installed; install the dashboard extra with "
+                "`uv sync --extra dashboard`"
+            ) from err
+
+        trackio.init(
+            project="Interpretable Diffusion",
+            name=run_name,
+            config={
+                "epochs": config["trainer_config"]["epochs"],
+                "learning_rate": config["trainer_config"]["learning_rate"],
+                "batch_size": batch_size,
+            },
+        )
 
     print("\nSetup complete.")
 
-    result = train(config, rngs=rngs, local=args.local, key=init_key)
+    result = train(config, rngs=rngs, progress=args.progress, key=init_key)
 
     print("\nTraining complete.")
     print(f"Final loss: {result.final_loss:.2E}")
@@ -286,4 +300,5 @@ if __name__ == "__main__":
     print(f"Best epoch: {result.best_epoch}")
     print(f"Train time: {format_time(result.train_time)}")
 
-    trackio.finish()
+    if args.progress:
+        trackio.finish()
