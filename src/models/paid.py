@@ -526,6 +526,11 @@ class PAID(nnx.Module):
         # on an even x_grid x t_grid discretisation of a length x time domain,
         # so the frame step is derived here rather than configured separately.
         self.integral_level = pde["integral_level"]
+        assert condition > 1, (
+            f"Condition must be greater than 1, received {condition}. With a "
+            "single condition frame the model cannot reason about the "
+            "behaviour of the auxiliary functions."
+        )
         self.condition = condition
 
         # Generation length: the number of frames PAID denoises past the
