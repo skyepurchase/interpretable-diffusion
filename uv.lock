@@ -1101,6 +1101,11 @@ dependencies = [
     { name = "pre-commit" },
     { name = "scikit-learn" },
     { name = "seaborn" },
+]
+
+[package.optional-dependencies]
+dashboard = [
+    { name = "tqdm" },
     { name = "trackio" },
 ]
 
@@ -1125,8 +1130,10 @@ requires-dist = [
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "seaborn", specifier = ">=0.13.2" },
-    { name = "trackio", specifier = ">=0.19.0" },
+    { name = "tqdm", marker = "extra == 'dashboard'", specifier = ">=4.66.0" },
+    { name = "trackio", marker = "extra == 'dashboard'", specifier = ">=0.19.0" },
 ]
+provides-extras = ["dashboard"]
 
 [package.metadata.requires-dev]
 dev = [
