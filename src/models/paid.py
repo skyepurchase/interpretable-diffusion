@@ -542,8 +542,12 @@ class PAID(nnx.Module):
 
         frame_dt = time / float(t_grid)
         self.dt = frame_dt / float(self.integral_level)
-        self.t1 = (self.window - 1) * frame_dt
         self.t_span = jnp.arange(self.window) * frame_dt
+        # Final solve time taken from the span itself (kept as a Python float
+        # so it stays concrete under jit); deriving it arithmetically can
+        # round below the last float32 span value and diffrax rejects saveat
+        # points outside [t0, t1]
+        self.t1 = float(self.t_span[-1])
 
         self.num_grid_points = x_grid
         ds = 0.0
