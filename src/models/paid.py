@@ -532,6 +532,11 @@ class PAID(nnx.Module):
         # condition. Legacy configs without gen_steps fall back to
         # t_grid - condition so the window still covers the whole sample.
         self.time_dim = pde.get("gen_steps", t_grid - self.condition)
+        assert self.time_dim > 0, (
+            f"Generation length must be positive, received {self.time_dim}. "
+            "Legacy configs derive it as t_grid - condition; add pde.gen_steps "
+            "when the condition equals or exceeds t_grid."
+        )
         # The denoiser sees the condition frames plus the generated frames
         self.window = self.time_dim + self.condition
 
