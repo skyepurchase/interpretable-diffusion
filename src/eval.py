@@ -27,12 +27,12 @@ def evaluate(
     assert isinstance(model, (PAID, PhysVAE)), f"{type(model)} is not supported."
     model.eval()
 
-    # Slice batches to the model's temporal window. PAID is evaluated on the
-    # denoised region [k:T+k] only; PhysVAE reconstructs its full window [0:T]
+    # PAID is evaluated on its denoised region [k:T+k]; other models on the
+    # full batch
     if isinstance(model, PAID):
         window, condition = model.window, model.condition
     else:
-        window, condition = model.time_dim, 0
+        window, condition = None, 0
 
     forecast_mae = None
     coeff_mae = jnp.zeros((0, 1))
@@ -43,7 +43,8 @@ def evaluate(
     else:
         pbar = testloader
     for batch, coeffs in pbar:
-        batch = batch[:, :window]
+        if window is not None:
+            batch = batch[:, :window]
         gen_key, key = jax.random.split(key)
         forecast, coeff_pred = model(batch, gen_key)
 

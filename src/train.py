@@ -16,7 +16,6 @@ from datasets import DATASETS
 from datasets.loader import ArrayLoader
 from models import LOSS_FNS, LOSS_LABELS, MODELS
 from models.paid import PAID
-from models.phys_vae import PhysVAE
 from utils import load_config
 
 
@@ -83,15 +82,8 @@ def train(
         rngs=rngs,
     )
 
-    # Slice batches to the model's temporal window: PAID denoises time_dim
-    # frames past its condition, PhysVAE reconstructs time_dim frames; the
-    # other models consume the full sample
-    if isinstance(model, PAID):
-        window = model.window
-    elif isinstance(model, PhysVAE):
-        window = model.time_dim
-    else:
-        window = None
+    # PAID denoises past its condition; slice batches to its window
+    window = model.window if isinstance(model, PAID) else None
 
     # Get loss function and loss labels
     loss_fn = LOSS_FNS[config["model"]]

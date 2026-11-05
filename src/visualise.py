@@ -106,11 +106,8 @@ def visualise(
     inputs = next(iter(test_loader))[0][: n_rows * n_cols]
     timesteps = next(iter(test_loader))[1][: n_rows * n_cols]
 
-    # Slice inputs to the model's temporal window (PAID: condition + gen
-    # steps; PhysVAE: time_dim); models without a window take the full sample
+    # Slice inputs to PAID's window; other models take the full sample
     window = getattr(loaded_model, "window", None)
-    if window is None:
-        window = getattr(loaded_model, "time_dim", None)
     if window is not None:
         inputs = inputs[:, :window]
 
