@@ -15,6 +15,8 @@ from jax.random import split
 from datasets import DATASETS
 from datasets.loader import ArrayLoader
 from models import LOSS_FNS, LOSS_LABELS, MODELS
+from models.paid import PAID
+from models.phys_vae import PhysVAE
 from utils import load_config
 
 
@@ -80,6 +82,16 @@ def train(
         dataset_config=config["dataset_config"],
         rngs=rngs,
     )
+
+    # Slice batches to the model's temporal window: PAID denoises time_dim
+    # frames past its condition, PhysVAE reconstructs time_dim frames; the
+    # other models consume the full sample
+    if isinstance(model, PAID):
+        window = model.window
+    elif isinstance(model, PhysVAE):
+        window = model.time_dim
+    else:
+        window = None
 
     # Get loss function and loss labels
     loss_fn = LOSS_FNS[config["model"]]
@@ -153,6 +165,8 @@ def train(
             else train_loader
         )
         for batch, _ in train_pbar:
+            if window is not None:
+                batch = batch[:, :window]
             key, train_key = split(key, num=2)
             losses = train_step(
                 model=model, data=batch, optimizer=optimizer, key=train_key
@@ -175,6 +189,8 @@ def train(
             else val_loader
         )
         for batch, _ in val_pbar:
+            if window is not None:
+                batch = batch[:, :window]
             key, val_key = split(key, num=2)
             losses = val_step(model=model, data=batch, key=val_key)[1]
 
