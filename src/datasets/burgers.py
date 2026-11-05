@@ -1,6 +1,6 @@
 from jaxtyping import PRNGKeyArray
-from torch.utils.data import DataLoader
 
+from datasets.loader import ArrayLoader
 from datasets.pivae import get_pivae
 
 
@@ -20,7 +20,7 @@ def get_burgers(
     retain_dim: bool = False,
     *,
     key: PRNGKeyArray,
-) -> tuple[DataLoader, DataLoader, DataLoader]:
+) -> tuple[ArrayLoader, ArrayLoader, ArrayLoader]:
     """Wrapper for PiVAE"""
     return get_pivae(
         dir,
