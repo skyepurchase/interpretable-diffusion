@@ -137,16 +137,12 @@ def make_ddim_step(
         # (B, 1)
         coeff = phys_params[0]
 
-        # PAID's denoiser generates only the region [k:]; DDIM the full sample
-        region = pred.shape[1] < x_t.shape[1]
-        x_t_gen = x_t[:, condition:] if region else x_t
-
         if estimation_type == "variance":
             eps = pred
-            x_0 = (x_t_gen - pred * jnp.sqrt(1 - alpha_t)) / jnp.sqrt(alpha_t)
+            x_0 = (x_t - pred * jnp.sqrt(1 - alpha_t)) / jnp.sqrt(alpha_t)
         else:  # Must be "mean" given guard earlier
             x_0 = pred
-            eps = (x_t_gen - x_0 * jnp.sqrt(alpha_t)) / jnp.sqrt(1 - alpha_t)
+            eps = (x_t - x_0 * jnp.sqrt(alpha_t)) / jnp.sqrt(1 - alpha_t)
 
         # x_tm1 : (B, T, X, 1)
         x_tm1 = jax.lax.cond(
@@ -156,10 +152,7 @@ def make_ddim_step(
         )
 
         # Assumes that x_T[:, :condition] is not random noise to begin with
-        if region:
-            x_tm1 = jnp.concatenate([x_t[:, :condition], x_tm1], axis=1)
-        else:
-            x_tm1 = jnp.concatenate([x_t[:, :condition], x_tm1[:, condition:]], axis=1)
+        x_tm1 = jnp.concatenate([x_t[:, :condition], x_tm1[:, condition:]], axis=1)
 
         # out : (B, T, X, 2)
         out = jnp.concatenate(
