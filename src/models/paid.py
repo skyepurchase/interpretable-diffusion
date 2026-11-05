@@ -508,10 +508,10 @@ class PAID(nnx.Module):
         self.integral_level = pde["integral_level"]
         self.time_dim = t_grid
 
-        frame_dt = time / float(t_grid - 1)
+        frame_dt = time / float(t_grid)
         self.dt = frame_dt / float(self.integral_level)
-        self.t1 = (self.time_dim - 1) * self.dt
-        self.t_span = jnp.linspace(0.0, self.t1, self.time_dim)
+        self.t1 = (self.time_dim - 1) * frame_dt
+        self.t_span = jnp.arange(self.time_dim) * frame_dt
 
         self.num_grid_points = x_grid
         ds = 0.0

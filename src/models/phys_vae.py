@@ -591,7 +591,7 @@ class PhysVAE(nnx.Module):
         self.integral_level = integral_level
 
         # The data's frame step follows from the dataset definition
-        frame_dt = time / float(t_grid - 1)
+        frame_dt = time / float(t_grid)
 
         self.integral_len = (t_grid - 1) * self.integral_level + 1
         self.integral_step = frame_dt / float(integral_level)
