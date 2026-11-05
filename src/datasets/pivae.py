@@ -3,14 +3,11 @@ from typing import Callable
 
 import jax
 import jax.numpy as jnp
-import numpy as np
-import torch
 from diffrax import Euler, ODETerm, SaveAt, diffeqsolve
 from diffrax._custom_types import RealScalarLike
 from jaxtyping import Array, PRNGKeyArray, PyTree
-from torch.utils.data import DataLoader, Dataset
 
-from datasets.utils import np_collate
+from datasets.loader import ArrayLoader
 
 # Fixed dataset generation seed. Hardcoded (not exposed in configs) so the
 # generated dataset is always identical regardless of when or how often it
@@ -18,30 +15,15 @@ from datasets.utils import np_collate
 GENERATION_SEED = 169800
 
 
-class PiVAEDataset(Dataset):
-    """A wrapper of the torch Dataset for the PiVAE datasets."""
-
-    def __init__(
-        self, series: Array, coefficients: Array, retain_dim: bool = False
-    ) -> None:
-        super().__init__()
-        # series is in the form (B, x, t) flattened would give (B, t*x)
-        # Instead (B, x*t) is desired so data[:, :12] gives the initial condition. Thus (B, t, x)
-        time_forward = jnp.permute_dims(series, (0, 2, 1))
-
-        if retain_dim:
-            self.data = torch.from_numpy(np.array(time_forward))
-        else:
-            self.data = torch.from_numpy(np.array(time_forward)).flatten(start_dim=1)
-
-        self.coefficients = torch.from_numpy(np.array(coefficients))
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def __getitem__(self, index) -> tuple[torch.Tensor, torch.Tensor]:
-        """"""
-        return self.data[index], self.coefficients[index]
+def to_time_forward(series: Array, retain_dim: bool = False) -> Array:
+    """
+    Convert samples of shape (B, x, t) to (B, t, x), flattened to (B, t*x)
+    unless the dimensions are retained.
+    """
+    time_forward = jnp.permute_dims(series, (0, 2, 1))
+    if retain_dim:
+        return time_forward
+    return time_forward.reshape(time_forward.shape[0], -1)
 
 
 def pendulum_ODE() -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]:
@@ -469,7 +451,7 @@ def get_pivae(
     retain_dim: bool = False,
     *,
     key: PRNGKeyArray,
-) -> tuple[DataLoader, DataLoader, DataLoader]:
+) -> tuple[ArrayLoader, ArrayLoader, ArrayLoader]:
     """Create pivae train, val, and test dataloaders.
 
     The dataset is defined by this configuration (domain, grids, parameter
@@ -565,23 +547,14 @@ def get_pivae(
         :train_split
     ]
 
-    test_dataset = PiVAEDataset(test, test_coeff, retain_dim)
-    validation_dataset = PiVAEDataset(validation, val_coeff, retain_dim)
-    train_dataset = PiVAEDataset(
-        train_pool[train_perm], train_coeff[train_perm], retain_dim
-    )
+    train_data = to_time_forward(train_pool[train_perm], retain_dim)
+    val_data = to_time_forward(validation, retain_dim)
+    test_data = to_time_forward(test, retain_dim)
 
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, collate_fn=np_collate, shuffle=True
+    train_loader = ArrayLoader(
+        train_data, train_coeff[train_perm], batch_size, key=key, shuffle=True
     )
-    val_loader = DataLoader(
-        validation_dataset,
-        batch_size=batch_size,
-        collate_fn=np_collate,
-        shuffle=False,
-    )
-    test_loader = DataLoader(
-        test_dataset, batch_size=batch_size, collate_fn=np_collate, shuffle=False
-    )
+    val_loader = ArrayLoader(val_data, val_coeff, batch_size, key=key, shuffle=False)
+    test_loader = ArrayLoader(test_data, test_coeff, batch_size, key=key, shuffle=False)
 
     return train_loader, val_loader, test_loader

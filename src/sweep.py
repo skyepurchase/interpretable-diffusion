@@ -6,9 +6,9 @@ import jax
 import trackio
 from flax import nnx
 from jaxtyping import PRNGKeyArray
-from torch.utils.data import DataLoader
 
 from datasets import DATASETS
+from datasets.loader import ArrayLoader
 from models import save_model
 from train import train
 from utils import load_config
@@ -18,8 +18,8 @@ def sweep_conditions(
     model_name: str,
     base_config: dict,
     conditions: list[int],
-    train_loader: DataLoader,
-    val_loader: DataLoader,
+    train_loader: ArrayLoader,
+    val_loader: ArrayLoader,
     checkpoint_dir: str,
     run_base: str,
     rngs: nnx.Rngs,
@@ -38,9 +38,9 @@ def sweep_conditions(
         Base model configuration
     conditions : list[int]
         List of condition values to try
-    train_loader : DataLoader
+    train_loader : ArrayLoader
         Training data loader
-    val_loader : DataLoader
+    val_loader : ArrayLoader
         Validation data loader
     checkpoint_dir : str
         Directory to save checkpoints

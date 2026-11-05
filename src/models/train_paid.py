@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 import jax.random
-
 from jax.random import split
 from jaxtyping import Array
 

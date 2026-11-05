@@ -10,10 +10,9 @@ from flax import nnx
 from datasets import DATASETS
 from models import load_model
 from utils import load_config
-from visualisers.ddim import generate_mnist, generate_timeseries
+from visualisers.ddim import generate_timeseries
 from visualisers.vae import (
     reconstruct_1D_series,
-    reconstruct_images,
     reconstruct_point_series,
 )
 
@@ -21,16 +20,9 @@ NOW = datetime.now().strftime("%y%m%d_%H%M%S")
 
 
 VISUALISER = {
-    "mnist": {
-        "vae": reconstruct_images,
-        "ddim": generate_mnist,
-    },
     "pivae-pendulum": {"phys_vae": reconstruct_point_series},
     "pivae-diffusion": {
         "phys_vae": reconstruct_1D_series,
-        "paid": generate_timeseries,
-    },
-    "pdebench-burgers": {
         "paid": generate_timeseries,
     },
     "burgers": {
@@ -138,8 +130,7 @@ def visualise(
         ax.set_xticks([])
         ax.set_yticks([])
 
-        colour = "gray" if dataset_name == "mnist" else None
-        ax.imshow(grid, cmap=colour)
+        ax.imshow(grid)
 
         plt.savefig(perm, format=format)
         plt.savefig(latest, format=format)
