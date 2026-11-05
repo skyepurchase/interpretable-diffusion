@@ -138,7 +138,6 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
 
     # (m, B, T, X, 1), (B, T, X, 1), (B, Z)
     x_hat, phys_pred, phys_params = model.denoiser.full_forward(x, tau)
-    phys_gen = x_hat[0]
 
     reconstruction_loss = (
         # Only train on the noised generation; the conditioned frames are fed
@@ -148,15 +147,18 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
         .mean()
     )
 
-    phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_gen)).sum(axis=-1)
+    # Pure physics trajectory over the full window, parameterised by the
+    # model's own coefficient estimates; the unmixer is pushed towards the
+    # physics implied by them. No alpha weighting: the single-step denoise is
+    # hardest at high tau and weighting by alpha would down-weight exactly
+    # those cases.
+    phys_traj = model.generate_physics(
+        phys_params, data[:, 0].reshape(-1, model.num_grid_points)
+    )
+    phys_traj = jnp.reshape(phys_traj, phys_pred.shape)
+    phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_traj)).sum(axis=-1)
     phys_loss = (
-        model.phys_reg
-        * (
-            phys_error[:, : model.condition].sum(axis=tuple(range(1, data.ndim - 1)))
-            + (
-                jnp.reshape(alpha, alpha_shape[:-1]) * phys_error[:, model.condition :]
-            ).sum(axis=tuple(range(1, data.ndim - 1)))
-        ).mean()
+        model.phys_reg * phys_error.sum(axis=tuple(range(1, data.ndim - 1))).mean()
     )
 
     disc_loss = model.disc_reg * discrepancy_loss(x_hat)
