@@ -72,12 +72,19 @@ class PhysUNet2D(nnx.Module):
         self.condition = condition
         # The solve covers only the denoised region
         cond_idx = condition - 1 if condition > 0 else 0
+        self.t_span = t_span
+        self.frame_dt = float(t_span[1] - t_span[0])
         self.t0 = float(t_span[cond_idx])
         self.t1 = t1
         self.solve_span = t_span[condition:]
         self.dt = dt
         self.num_grid_points = num_grid_points
         self.pde_dim = pde_dim
+        if pde_dim > 2 * num_grid_points:
+            raise NotImplementedError(
+                "Derivative initial-state estimation only supports systems with "
+                f"at most two time derivatives, received {pde_dim // num_grid_points}."
+            )
         self.time_dim = time_dim
         self.data_dim = num_grid_points * time_dim
         self.embed_dim = embed_dim
@@ -331,10 +338,31 @@ class PhysUNet2D(nnx.Module):
 
         # init_cond : ^(B*n, X*D)
         cond_idx = self.condition - 1 if self.condition > 0 else 0
+        init_state = x[:, cond_idx].reshape(-1, self.num_grid_points)
+        if self.pde_dim > self.num_grid_points:
+            # The ODE state carries derivatives beyond the signal itself.
+            # Estimate the first derivative at the anchor from the clean
+            # condition frames instead of zero-padding: a second-order
+            # one-sided difference when three frames are available, a
+            # first-order backward difference when only two are.
+            frame_dt = self.frame_dt
+            if self.condition >= 3:
+                deriv = (
+                    3 * x[:, cond_idx] - 4 * x[:, cond_idx - 1] + x[:, cond_idx - 2]
+                ) / (2 * frame_dt)
+            else:
+                deriv = (x[:, cond_idx] - x[:, cond_idx - 1]) / frame_dt
+            init_state = jnp.concatenate(
+                [
+                    init_state,
+                    deriv.reshape(-1, self.num_grid_points),
+                ],
+                axis=1,
+            )
         init_cond = jnp.tile(
             jnp.pad(
-                x[:, cond_idx].reshape(-1, self.num_grid_points),
-                ((0, 0), (0, self.pde_dim - self.num_grid_points)),
+                init_state,
+                ((0, 0), (0, self.pde_dim - init_state.shape[1])),
             ),
             reps=(pre_combs, 1),
         )
