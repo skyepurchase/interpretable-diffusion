@@ -172,11 +172,21 @@ class PhysUNet2D(nnx.Module):
             self.pre_funcs.append(func)
 
         ## Post PDE perturbations
+        # Each post-function takes the decoded series plus the physics
+        # latents and every auxiliary latent up to and including its own,
+        # so the input width grows with the function's position
         self.post_funcs = nnx.List([])
-        for func_cfg in post_funcs:
-            # Z + X*T -> X*(T-1)
+        phys_latent_dims = [f["latent_dim"] for f in phys_funcs]
+        pre_latent_dims = [f["latent_dim"] for f in pre_funcs]
+        for i, func_cfg in enumerate(post_funcs):
+            # X*T + prior latents -> X*T
+            prior_dims = (
+                sum(phys_latent_dims)
+                + sum(pre_latent_dims)
+                + sum(f["latent_dim"] for f in post_funcs[: i + 1])
+            )
             func = make_mlp(
-                func_cfg["latent_dim"] + self.data_dim,
+                prior_dims + self.data_dim,
                 func_cfg["dims"],
                 self.data_dim,
                 func_cfg["act"],
@@ -402,16 +412,18 @@ class PhysUNet2D(nnx.Module):
         # phys_x_hat : (m, B, X*T)
         phys_x_hat = jnp.tile(phys_x_hat, [post_combs, 1, 1])
 
-        for z_aux, post_func, selections in zip(
-            aux_latents[
-                len(self.pre_funcs) : len(self.pre_funcs) + len(self.post_funcs)
-            ],
-            self.post_funcs,
-            post_selections,
+        # Each post-function consumes the decoded series plus the physics
+        # latents and every auxiliary latent up to and including its own
+        prior_latents = list(phys_params) + list(aux_latents[: len(self.pre_funcs)])
+        post_latents = aux_latents[len(self.pre_funcs) :]
+        for i, (post_func, selections) in enumerate(
+            zip(self.post_funcs, post_selections)
         ):
-            # z_aux : (B, Z), phys : (B, X*T) -> (B, X*T)
+            z_in = jnp.concatenate(prior_latents + post_latents[: i + 1], axis=-1)
+
+            # z_in : (B, Z), phys : (B, X*T) -> (B, X*T)
             def apply_func(phys, apply):
-                return phys + apply * post_func(jnp.concatenate([z_aux, phys], axis=-1))
+                return phys + apply * post_func(jnp.concatenate([phys, z_in], axis=-1))
 
             # phys_x_hat : (m, B, X*T)
             phys_x_hat = jax.vmap(apply_func, in_axes=(0, 0), out_axes=0)(

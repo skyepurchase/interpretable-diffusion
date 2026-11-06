@@ -205,6 +205,7 @@ class PhysDecoder(nnx.Module):
         integral_level: int,
         t_span: jax.Array,
         ode_solver: str,
+        phys_latent_dims: list[int],
         x_log_sigma: float = 0.01,
         map: str = "identity",
         time_encoding: str = "sin_cos",
@@ -254,9 +255,18 @@ class PhysDecoder(nnx.Module):
             )
             self.pre_funcs.append(func)
 
-        for func_cfg in post_funcs:
+        # Each post-function takes the decoded series plus the physics
+        # latents and every auxiliary latent up to and including its own,
+        # so the input width grows with the function's position
+        pre_latent_dims = [f["latent_dim"] for f in pre_funcs]
+        for i, func_cfg in enumerate(post_funcs):
+            prior_dims = (
+                sum(phys_latent_dims)
+                + sum(pre_latent_dims)
+                + sum(f["latent_dim"] for f in post_funcs[: i + 1])
+            )
             func = make_mlp(
-                func_cfg["latent_dim"] + self.data_dim,
+                prior_dims + self.data_dim,
                 func_cfg["dims"],
                 self.data_dim - self.x_grid,  # Do not overwrite init condition
                 func_cfg["act"],
@@ -403,15 +413,19 @@ class PhysDecoder(nnx.Module):
             f"Expected one auxiliary latent per pre/post func, {len(latents)} != {self.num_pre_funcs} + {self.num_post_funcs}"
         )
 
-        for z_aux, post_func, selections in zip(
-            latents[len(self.pre_funcs) : len(self.pre_funcs) + len(self.post_funcs)],
-            self.post_funcs,
-            self.post_selections,
+        # Each post-function consumes the decoded series plus the physics
+        # latents and every auxiliary latent up to and including its own
+        prior_latents = list(phys_params) + list(latents[: len(self.pre_funcs)])
+        post_latents = latents[len(self.pre_funcs) :]
+        for i, (post_func, selections) in enumerate(
+            zip(self.post_funcs, self.post_selections)
         ):
+            z_in = jnp.concatenate(prior_latents + post_latents[: i + 1], axis=1)
+
             # x_mean : (B, L*T), apply : (1,)
             def apply_func(x_mean, apply):
                 return x_mean + apply * jnp.pad(
-                    post_func(jnp.concatenate([z_aux, x_mean], axis=1)),
+                    post_func(jnp.concatenate([x_mean, z_in], axis=1)),
                     ((0, 0), (self.x_grid, 0)),
                     mode="empty",
                 )
@@ -518,13 +532,16 @@ class PhysDecoder(nnx.Module):
             f"Expected one auxiliary latent per pre/post func, {len(latents)} != {self.num_pre_funcs} + {self.num_post_funcs}"
         )
 
-        for z_aux, post_func in zip(
-            latents[len(self.pre_funcs) : len(self.pre_funcs) + len(self.post_funcs)],
-            self.post_funcs,
-        ):
+        # Each post-function consumes the decoded series plus the physics
+        # latents and every auxiliary latent up to and including its own
+        prior_latents = list(phys_params) + list(latents[: len(self.pre_funcs)])
+        post_latents = latents[len(self.pre_funcs) :]
+        for i, post_func in enumerate(self.post_funcs):
+            z_in = jnp.concatenate(prior_latents + post_latents[: i + 1], axis=1)
+
             # x_means : (B, L*T)
             x_means += jnp.pad(
-                post_func(jnp.concatenate([z_aux, x_means], axis=1)),
+                post_func(jnp.concatenate([x_means, z_in], axis=1)),
                 ((0, 0), (self.x_grid, 0)),
                 mode="empty",
             )
@@ -618,6 +635,7 @@ class PhysVAE(nnx.Module):
         )
         self.decode = PhysDecoder(
             **decoder,
+            phys_latent_dims=[f["latent_dim"] for f in encoder["phys_funcs"]],
             t1=self.t_final,
             dt=self.integral_step,
             L=length,
