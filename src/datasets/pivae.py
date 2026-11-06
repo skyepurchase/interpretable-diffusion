@@ -4,13 +4,23 @@ from typing import Callable
 
 import jax
 import jax.numpy as jnp
-from diffrax import Euler, ODETerm, SaveAt, diffeqsolve
+from diffrax import Dopri8, ODETerm, SaveAt, diffeqsolve
 from diffrax._custom_types import RealScalarLike
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from datasets.loader import ArrayLoader
 
 GENERATION_SEED = 169800
+
+# Solver and observation noise applied when generating each system's dataset.
+# The manifest records these per cache so datasets generated under a different
+# convention are regenerated instead of silently reused.
+SOLVERS = {"dopri8": Dopri8}
+GENERATION = {
+    "pendulum": {"solver": "dopri8", "noise": 1e-2},
+    "diffusion": {"solver": "dopri8", "noise": 1e-3},
+    "burgers": {"solver": "dopri8", "noise": 1e-3},
+}
 
 
 def to_time_forward(series: Array, retain_dim: bool = False) -> Array:
@@ -73,6 +83,9 @@ def generate_pendulum_data(
 ) -> tuple[Array, Array]:
     """
     Using the force damped ODE above generate a set of randomly initialised samples.
+
+    The ODE is integrated with the GENERATION solver and Gaussian observation
+    noise of the GENERATION standard deviation is added to the samples.
 
     Parameters
     ----------
@@ -140,7 +153,7 @@ def generate_pendulum_data(
     # sol : (T, B, X)
     sol = diffeqsolve(
         ODETerm(ode),
-        Euler(),
+        SOLVERS[GENERATION["pendulum"]["solver"]](),
         t0=0,
         t1=time,
         dt0=dt,
@@ -151,8 +164,15 @@ def generate_pendulum_data(
     if sol is None:
         raise RuntimeError("ODE solution returned None")
 
+    noise_key, key = jax.random.split(key, 2)
+
     # samples : (B, 1, T)
-    return jnp.permute_dims(sol, (1, 2, 0))[:, :1], omega
+    return (
+        jnp.permute_dims(sol, (1, 2, 0))[:, :1]
+        + GENERATION["pendulum"]["noise"]
+        * jax.random.normal(noise_key, (n_samples, 1, t_grid)),
+        omega,
+    )
 
 
 def diffusion_PDE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]:
@@ -263,7 +283,7 @@ def generate_diffusion_data(
 
     sol = diffeqsolve(
         ODETerm(ode),
-        Euler(),
+        SOLVERS[GENERATION["diffusion"]["solver"]](),
         t0=0,
         t1=time,
         dt0=dt,
@@ -277,9 +297,9 @@ def generate_diffusion_data(
 
     noise_key, key = jax.random.split(key, 2)
 
-    return jnp.permute_dims(sol, (1, 2, 0)) + 1e-3 * jax.random.normal(
-        noise_key, (n_samples, x_grid, t_grid)
-    ), diff_coeff
+    return jnp.permute_dims(sol, (1, 2, 0)) + GENERATION["diffusion"][
+        "noise"
+    ] * jax.random.normal(noise_key, (n_samples, x_grid, t_grid)), diff_coeff
 
 
 def burgers_ODE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTree]:
@@ -412,7 +432,7 @@ def generate_burgers_data(
     # sol : (T, B, X)
     sol = diffeqsolve(
         ODETerm(ode),
-        Euler(),
+        SOLVERS[GENERATION["burgers"]["solver"]](),
         t0=0,
         t1=time,
         dt0=dt,
@@ -423,8 +443,15 @@ def generate_burgers_data(
     if sol is None:
         raise RuntimeError("ODE solution returned None")
 
+    noise_key, key = jax.random.split(key, 2)
+
     # samples : (B, X + 1, T)
-    return jnp.permute_dims(sol, (1, 2, 0)), phys_param
+    return (
+        jnp.permute_dims(sol, (1, 2, 0))
+        + GENERATION["burgers"]["noise"]
+        * jax.random.normal(noise_key, (n_samples, x_grid, t_grid)),
+        phys_param,
+    )
 
 
 SYSTEMS = {
@@ -487,6 +514,8 @@ def get_pivae(
         bool(entry)
         and entry.get("x_grid") == x_grid
         and entry.get("time") == time
+        and entry.get("solver") == GENERATION[system]["solver"]
+        and entry.get("noise") == GENERATION[system]["noise"]
         and all(
             role in files and os.path.exists(os.path.join(system_dir, files[role]))
             for role in splits
@@ -566,6 +595,8 @@ def get_pivae(
         manifest["grid_size"][str(t_grid)] = {
             "x_grid": x_grid,
             "time": time,
+            "solver": GENERATION[system]["solver"],
+            "noise": GENERATION[system]["noise"],
             "files": {role: f"{role}_{t_grid}.npy" for role in splits},
         }
         lines = []
@@ -573,6 +604,10 @@ def get_pivae(
             lines.append(f"[grid_size.{grid_id}]")
             lines.append(f"x_grid = {grid['x_grid']}")
             lines.append(f"time = {grid['time']!r}")
+            if "solver" in grid:
+                lines.append(f'solver = "{grid["solver"]}"')
+            if "noise" in grid:
+                lines.append(f"noise = {grid['noise']!r}")
             lines.append("")
             lines.append(f"[grid_size.{grid_id}.files]")
             for role, name in grid["files"].items():
