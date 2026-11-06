@@ -9,6 +9,7 @@ from jaxtyping import PyTree
 
 from models.mlp import make_mlp
 from models.physics_models import get_physics_model, get_solver
+from models.utils import TIME_ENCODING_DIMS, TIME_ENCODINGS, time_features
 from utils import Distribution
 
 
@@ -206,6 +207,7 @@ class PhysDecoder(nnx.Module):
         ode_solver: str,
         x_log_sigma: float = 0.01,
         map: str = "identity",
+        time_encoding: str = "sin_cos",
         *,
         rngs: nnx.Rngs,
     ) -> None:
@@ -217,6 +219,11 @@ class PhysDecoder(nnx.Module):
         self.t_span = t_span
         self.x_grid = num_grid_points
         _, _, self.num_derivatives = get_physics_model(system)
+
+        assert time_encoding in TIME_ENCODINGS, (
+            f"Unknown time encoding: {time_encoding}, expected one of {TIME_ENCODINGS}"
+        )
+        self.time_encoding = time_encoding
 
         self.data_dim = self.t_grid * self.x_grid
         self.ode_dim = self.x_grid * self.num_derivatives
@@ -235,10 +242,11 @@ class PhysDecoder(nnx.Module):
         self.post_funcs = nnx.List()
         for func_cfg in pre_funcs:
             # Assume all models are MLPs
-            # TODO: use a time embedding
-            # z + L*D + t -> dy
+            # z + L*D + t-features -> dy
             func = make_mlp(
-                func_cfg["latent_dim"] + self.ode_dim + 2,
+                func_cfg["latent_dim"]
+                + self.ode_dim
+                + TIME_ENCODING_DIMS[time_encoding],
                 func_cfg["dims"],
                 self.x_grid,
                 func_cfg["act"],
@@ -329,11 +337,14 @@ class PhysDecoder(nnx.Module):
             ):
                 # y : (B, 2), apply : (1,)
                 def apply_func(y, apply):
-                    t_vec = jnp.ones_like(y)[:, 0, None] * t
                     return apply * jnp.pad(
                         pre_func(
                             jnp.concatenate(
-                                [z_aux, y, jnp.sin(t_vec), jnp.cos(t_vec)],
+                                [
+                                    z_aux,
+                                    y,
+                                    time_features(t, y, self.time_encoding),
+                                ],
                                 axis=1,
                             )
                         ),
@@ -460,11 +471,14 @@ class PhysDecoder(nnx.Module):
             for z_aux, pre_func, _ in zip(
                 latents[: len(self.pre_funcs)], self.pre_funcs, self.pre_selections
             ):
-                t_vec = jnp.ones_like(y)[:, 0, None] * t
                 ys_dot_aux += jnp.pad(
                     pre_func(
                         jnp.concatenate(
-                            [z_aux, y, jnp.sin(t_vec), jnp.cos(t_vec)],
+                            [
+                                z_aux,
+                                y,
+                                time_features(t, y, self.time_encoding),
+                            ],
                             axis=1,
                         )
                     ),

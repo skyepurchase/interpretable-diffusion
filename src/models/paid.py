@@ -13,6 +13,7 @@ from models.mlp import make_mlp
 from models.modules.acts import ACTS
 from models.phys_vae import gen_selections
 from models.physics_models import Operator, get_physics_model, get_solver
+from models.utils import TIME_ENCODING_DIMS, TIME_ENCODINGS, time_features
 
 
 class SinusoidalEmbedding:
@@ -51,6 +52,7 @@ class PhysUNet2D(nnx.Module):
         rngs: nnx.Rngs,
         embed_dim: int = 128,
         map: str = "identity",
+        time_encoding: str = "sin_cos",
     ):
         # Constants
         num_pre_funcs = len(pre_funcs)
@@ -60,6 +62,11 @@ class PhysUNet2D(nnx.Module):
         self.pre_selections, self.post_selections = gen_selections(
             num_pre_funcs, num_post_funcs
         )
+
+        assert time_encoding in TIME_ENCODINGS, (
+            f"Unknown time encoding: {time_encoding}, expected one of {TIME_ENCODINGS}"
+        )
+        self.time_encoding = time_encoding
 
         ## PDE solver constants
         self.condition = condition
@@ -145,9 +152,11 @@ class PhysUNet2D(nnx.Module):
         ## PDE perturbations
         self.pre_funcs = nnx.List()
         for func_cfg in pre_funcs:
-            # Z + X*D + t -> dy
+            # Z + X*D + t-features -> dy
             func = make_mlp(
-                func_cfg["latent_dim"] + self.pde_dim + 2,
+                func_cfg["latent_dim"]
+                + self.pde_dim
+                + TIME_ENCODING_DIMS[time_encoding],
                 func_cfg["dims"],
                 self.num_grid_points,
                 func_cfg["act"],
@@ -299,11 +308,15 @@ class PhysUNet2D(nnx.Module):
             ):
                 # y : (B, D), apply : (1)
                 def apply_func(y, apply):
-                    t_vec = jnp.ones_like(y)[:, 0, None] * t
                     return apply * jnp.pad(
                         pre_func(
                             jnp.concatenate(
-                                [z_aux, y, jnp.sin(t_vec), jnp.cos(t_vec)], axis=-1
+                                [
+                                    z_aux,
+                                    y,
+                                    time_features(t, y, self.time_encoding),
+                                ],
+                                axis=-1,
                             )
                         ),
                         ((0, 0), (self.pde_dim - self.num_grid_points, 0)),
@@ -484,6 +497,7 @@ class PAID(nnx.Module):
         condition: int = 5,
         jump: int = 10,
         map: str = "identity",
+        time_encoding: str = "sin_cos",
         pad: list[tuple] = [(0, 0), (0, 0)],
         *,
         rngs: nnx.Rngs,
@@ -561,6 +575,7 @@ class PAID(nnx.Module):
             self.solver,
             embed_dim=embed_dim,
             map=map,
+            time_encoding=time_encoding,
             rngs=rngs,
         )
 

@@ -38,3 +38,37 @@ def remove_padding(a: Array, padding: list[tuple[int, int]]):
         _, a, _ = jnp.split(a, [left_pad, length - right_pad], axis=dim)
 
     return a
+
+
+TIME_ENCODINGS = ("raw", "sin_cos", "both")
+
+TIME_ENCODING_DIMS = {"raw": 1, "sin_cos": 2, "both": 3}
+
+
+def time_features(t, template: Array, encoding: str) -> Array:
+    """
+    Encode the ODE time as features for the in-ODE auxiliary functions.
+
+    Parameters
+    ----------
+    t : RealScalarLike
+        The current time
+    template : Array (B, D)
+        Batched array whose first column shapes the time vector
+    encoding : str
+        One of "raw" (t), "sin_cos" (sin t, cos t), or "both"
+        (t, sin t, cos t)
+
+    Returns
+    -------
+    features : Array (B, 1 | 2 | 3)
+        The time features, matching TIME_ENCODING_DIMS[encoding]
+    """
+    t_vec = jnp.ones_like(template)[:, 0, None] * t
+    if encoding == "raw":
+        return t_vec
+    if encoding == "sin_cos":
+        return jnp.concatenate([jnp.sin(t_vec), jnp.cos(t_vec)], axis=1)
+    if encoding == "both":
+        return jnp.concatenate([t_vec, jnp.sin(t_vec), jnp.cos(t_vec)], axis=1)
+    raise ValueError(f"Unknown time encoding: {encoding}")
