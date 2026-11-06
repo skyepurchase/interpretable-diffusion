@@ -97,9 +97,21 @@ class PhysEncoder(nnx.Module):
 
         latent_dims = reduce(lambda x, y: x + y, self.aux_latent_dims)
 
+        # "latents": the residual sees only the auxiliary means (the advdif
+        # original's design). "latents_and_data": it also sees the flattened
+        # observation (the pendulum original's design).
+        residual_input = unmixer.get("residual_input", "latents")
+        assert residual_input in ("latents", "latents_and_data"), (
+            f"Unknown unmixer residual input: {residual_input}, expected "
+            "'latents' or 'latents_and_data'"
+        )
+        self.residual_input = residual_input
+
         self.unmixer_map = nnx.Linear(self.x_grid, self.x_grid, rngs=rngs)
         self.unmixer_res = make_mlp(
-            latent_dims,
+            latent_dims + self.data_dim
+            if residual_input == "latents_and_data"
+            else latent_dims,
             unmixer["dims"],
             self.data_dim,
             unmixer["act"],
@@ -148,9 +160,12 @@ class PhysEncoder(nnx.Module):
 
         skip = x if self.residual else 0
         unmix_map = self.unmixer_map(x)
-        unmix_res = self.unmixer_res(
-            jnp.concatenate([latent[0] for latent in aux_stats], axis=1)
-        ).reshape(-1, self.t_grid, self.x_grid)
+        res_in = [latent[0] for latent in aux_stats]
+        if self.residual_input == "latents_and_data":
+            res_in.append(x.reshape(-1, self.data_dim))
+        unmix_res = self.unmixer_res(jnp.concatenate(res_in, axis=1)).reshape(
+            -1, self.t_grid, self.x_grid
+        )
 
         phys = (unmix_map + unmix_res + skip).reshape(-1, self.data_dim)
 
