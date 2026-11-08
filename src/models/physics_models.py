@@ -74,23 +74,19 @@ def make_diffusion_model(ds: jax.Array, boundary: str | float = 0.0) -> Operator
         )
 
         if boundary == "periodic":
-            bound_y = jnp.concatenate([y[:, -2:], y, y[:, :2]], axis=1)
-        else:
-            bound_y = y
+            # Single-pass central second difference; the roll wraps the grid
+            d2y_ds2 = (jnp.roll(y, -1, axis=1) - 2 * y + jnp.roll(y, 1, axis=1)) / (
+                ds**2
+            )
+            return diff_coeff * d2y_ds2
 
-        # finite differences
-        dy_ds = jnp.gradient(bound_y, ds, axis=1)
-        assert not isinstance(dy_ds, list)
-
-        d2y_ds2 = jnp.gradient(dy_ds, ds, axis=1)
-        assert not isinstance(d2y_ds2, list)
-
-        # generate derivatives
+        # Interior central second difference; edge cells are replicated so
+        # the stencil is defined on the full grid
+        padded = jnp.pad(y, ((0, 0), (1, 1)), mode="edge")
+        d2y_ds2 = (padded[:, 2:] - 2 * padded[:, 1:-1] + padded[:, :-2]) / (ds**2)
         dy_dt = diff_coeff * d2y_ds2
 
-        if boundary == "periodic":
-            return dy_dt[:, 2:-2]
-        elif isinstance(boundary, float):
+        if isinstance(boundary, float):
             return jnp.pad(dy_dt[:, 1:-1], ((0, 0), (1, 1)), constant_values=boundary)
         else:
             raise ValueError(
