@@ -5,6 +5,7 @@ from argparse import ArgumentParser
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -117,7 +118,13 @@ def train(
         optimizer.update(model, grads)
         return losses
 
-    val_step = nnx.jit(loss_fn)
+    # Validation skips the augmentation term and its ODE solve where the
+    # loss supports it; the logged val_loss is then the reconstruction +
+    # physics + discrepancy subtotal
+    if config["model"] == "paid":
+        val_step = nnx.jit(partial(loss_fn, compute_aug=False))
+    else:
+        val_step = nnx.jit(loss_fn)
 
     # Reconstruction loss is the first auxiliary entry for the physics models
     # and the total loss itself for vae and ddim
@@ -125,13 +132,16 @@ def train(
 
     val_ckpt_dir = os.path.join(config["checkpoint_dir"], "val-checkpoint")
     os.makedirs(val_ckpt_dir, exist_ok=True)
-    checkpointers: list[tuple[ocp.AsyncCheckpointer, int]] = []
-    ckpt_id = 0
+    checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
+    # Checkpoints are saved every ckpt_interval epochs (and at the final
+    # epoch); the best saved epoch is selected at the end of the run, so
+    # model selection granularity is ckpt_interval
+    ckpt_interval = config["trainer_config"].get("ckpt_interval", 5)
+    saved_epochs: list[int] = []
 
     # Training loop
     final_loss = 0.0
-    best_loss = float("inf")
-    best_epoch = 0
+    val_history: list[jax.Array] = []
 
     if progress:
         from tqdm import tqdm
@@ -195,8 +205,9 @@ def train(
         # Mean over batches, still on device
         val_mean = val_running / len(val_loader)
 
-        # Best-model gating requires a Python float: one scalar sync per epoch
-        val_reconstruction = float(val_mean[1])
+        # Per-epoch validation reconstruction, kept on device for the
+        # deferred best-model selection after the epoch loop
+        val_history.append(val_mean[1])
 
         # Log metrics per epoch (trackio is global singleton, assumed initialized by caller)
         if progress:
@@ -206,20 +217,16 @@ def train(
             for loss_label, value in zip(loss_labels, train_mean.tolist()):
                 running_loss[loss_label] = value
             running_loss["val_loss"] = float(val_mean[0])
-            running_loss["val_reconstruction"] = val_reconstruction
+            running_loss["val_reconstruction"] = float(val_mean[1])
             trackio.log(running_loss)
 
-        if best_loss >= val_reconstruction:
-            best_loss = val_reconstruction
-            best_epoch = epoch
-
+        # Interval checkpointing: no per-epoch save decision, no per-epoch sync
+        if (epoch + 1) % ckpt_interval == 0 or epoch == epochs - 1:
             _, state = nnx.split(model)
-            checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
             checkpointer.save(
-                os.path.join(os.getcwd(), val_ckpt_dir, str(ckpt_id)), state
+                os.path.join(os.getcwd(), val_ckpt_dir, str(epoch)), state
             )
-            checkpointers.append((checkpointer, ckpt_id))
-            ckpt_id += 1
+            saved_epochs.append(epoch)
 
         if progress:
             assert isinstance(pbar, tqdm)
@@ -234,19 +241,25 @@ def train(
     train_time = end - start
     final_loss = float(final_loss)
 
-    # Wait on the outstanding saves
-    for checkpointer, _ in checkpointers:
-        checkpointer.wait_until_finished()
+    # Deferred best-model selection: one sync for the whole run. The best
+    # model is the saved epoch with the lowest validation reconstruction
+    checkpointer.wait_until_finished()
+    history = jnp.stack(val_history)
+    saved_mask = jnp.array(
+        [epoch in set(saved_epochs) for epoch in range(epochs)], dtype=bool
+    )
+    best_epoch = int(jnp.argmin(jnp.where(saved_mask, history, jnp.inf)))
+    best_loss = float(history[best_epoch])
 
     graph, state = nnx.split(model)
-    checkpointer = ocp.StandardCheckpointer()
-    best_state = checkpointer.restore(
-        os.path.join(os.getcwd(), val_ckpt_dir, str(checkpointers[-1][1])), state
+    restore_checkpointer = ocp.StandardCheckpointer()
+    best_state = restore_checkpointer.restore(
+        os.path.join(os.getcwd(), val_ckpt_dir, str(best_epoch)), state
     )
     model = nnx.merge(graph, best_state)
 
-    for _, ckpt_id in checkpointers:
-        shutil.rmtree(os.path.join(os.getcwd(), val_ckpt_dir, str(ckpt_id)))
+    for epoch in saved_epochs:
+        shutil.rmtree(os.path.join(os.getcwd(), val_ckpt_dir, str(epoch)))
 
     return TrainResult(
         model=model,
