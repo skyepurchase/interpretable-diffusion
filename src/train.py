@@ -5,8 +5,10 @@ from argparse import ArgumentParser
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 
 import jax
+import jax.numpy as jnp
 import optax
 import orbax.checkpoint as ocp
 from flax import nnx
@@ -116,7 +118,13 @@ def train(
         optimizer.update(model, grads)
         return losses
 
-    val_step = nnx.jit(loss_fn)
+    # Validation skips the augmentation term and its ODE solve where the
+    # loss supports it; the logged val_loss is then the reconstruction +
+    # physics + discrepancy subtotal
+    if config["model"] == "paid":
+        val_step = nnx.jit(partial(loss_fn, compute_aug=False))
+    else:
+        val_step = nnx.jit(loss_fn)
 
     # Reconstruction loss is the first auxiliary entry for the physics models
     # and the total loss itself for vae and ddim
@@ -124,13 +132,16 @@ def train(
 
     val_ckpt_dir = os.path.join(config["checkpoint_dir"], "val-checkpoint")
     os.makedirs(val_ckpt_dir, exist_ok=True)
-    checkpointers: list[tuple[ocp.AsyncCheckpointer, int]] = []
-    ckpt_id = 0
+    checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
+    # Checkpoints are saved every ckpt_interval epochs (and at the final
+    # epoch); the best saved epoch is selected at the end of the run, so
+    # model selection granularity is ckpt_interval
+    ckpt_interval = config["trainer_config"].get("ckpt_interval", 5)
+    saved_epochs: list[int] = []
 
     # Training loop
     final_loss = 0.0
-    best_loss = float("inf")
-    best_epoch = 0
+    val_history: list[jax.Array] = []
 
     if progress:
         from tqdm import tqdm
@@ -143,7 +154,8 @@ def train(
 
     start = time.perf_counter()
     for epoch in pbar:
-        running_loss = defaultdict(float)
+        # Device-side accumulator; synced only when a consumer needs floats
+        train_running = None
 
         train_pbar = (
             tqdm(train_loader, desc="Train batches", leave=False)
@@ -165,10 +177,13 @@ def train(
                     f"sub_loss_{i + 1}" for i in range(len(losses) - 1)
                 ]
 
-            for loss_label, loss in zip(loss_labels, losses):
-                running_loss[loss_label] += loss.item() / len(train_loader)
+            train_running = losses if train_running is None else train_running + losses
+
+        # Mean over batches, still on device
+        train_mean = train_running / len(train_loader)
 
         model.eval()
+        val_running = None
         val_pbar = (
             tqdm(val_loader, desc="Validation batches", leave=False)
             if progress
@@ -182,30 +197,36 @@ def train(
 
             assert len(losses.shape) == 1, "Only vector loss outputs can be processed"
 
-            running_loss["val_loss"] += losses[0].item() / len(val_loader)
-            running_loss["val_reconstruction"] += losses[val_rec_idx].item() / len(
-                val_loader
-            )
+            vals = jnp.stack([losses[0], losses[val_rec_idx]])
+            val_running = vals if val_running is None else val_running + vals
 
         model.train()
+
+        # Mean over batches, still on device
+        val_mean = val_running / len(val_loader)
+
+        # Per-epoch validation reconstruction, kept on device for the
+        # deferred best-model selection after the epoch loop
+        val_history.append(val_mean[1])
 
         # Log metrics per epoch (trackio is global singleton, assumed initialized by caller)
         if progress:
             import trackio
 
+            running_loss = defaultdict(float)
+            for loss_label, value in zip(loss_labels, train_mean.tolist()):
+                running_loss[loss_label] = value
+            running_loss["val_loss"] = float(val_mean[0])
+            running_loss["val_reconstruction"] = float(val_mean[1])
             trackio.log(running_loss)
 
-        if best_loss >= running_loss["val_reconstruction"]:
-            best_loss = running_loss["val_reconstruction"]
-            best_epoch = epoch
-
+        # Interval checkpointing: no per-epoch save decision, no per-epoch sync
+        if (epoch + 1) % ckpt_interval == 0 or epoch == epochs - 1:
             _, state = nnx.split(model)
-            checkpointer = ocp.AsyncCheckpointer(ocp.StandardCheckpointHandler())
             checkpointer.save(
-                os.path.join(os.getcwd(), val_ckpt_dir, str(ckpt_id)), state
+                os.path.join(os.getcwd(), val_ckpt_dir, str(epoch)), state
             )
-            checkpointers.append((checkpointer, ckpt_id))
-            ckpt_id += 1
+            saved_epochs.append(epoch)
 
         if progress:
             assert isinstance(pbar, tqdm)
@@ -213,24 +234,32 @@ def train(
                 f"Training, loss={running_loss['loss']:.2E}, val_loss={running_loss['val_loss']:.2E}"
             )
 
-        final_loss = running_loss["loss"]
+        # Kept on device; converted to float once after the epoch loop
+        final_loss = train_mean[0]
 
     end = time.perf_counter()
     train_time = end - start
+    final_loss = float(final_loss)
 
-    # Wait on the outstanding saves
-    for checkpointer, _ in checkpointers:
-        checkpointer.wait_until_finished()
+    # Deferred best-model selection: one sync for the whole run. The best
+    # model is the saved epoch with the lowest validation reconstruction
+    checkpointer.wait_until_finished()
+    history = jnp.stack(val_history)
+    saved_mask = jnp.array(
+        [epoch in set(saved_epochs) for epoch in range(epochs)], dtype=bool
+    )
+    best_epoch = int(jnp.argmin(jnp.where(saved_mask, history, jnp.inf)))
+    best_loss = float(history[best_epoch])
 
     graph, state = nnx.split(model)
-    checkpointer = ocp.StandardCheckpointer()
-    best_state = checkpointer.restore(
-        os.path.join(os.getcwd(), val_ckpt_dir, str(checkpointers[-1][1])), state
+    restore_checkpointer = ocp.StandardCheckpointer()
+    best_state = restore_checkpointer.restore(
+        os.path.join(os.getcwd(), val_ckpt_dir, str(best_epoch)), state
     )
     model = nnx.merge(graph, best_state)
 
-    for _, ckpt_id in checkpointers:
-        shutil.rmtree(os.path.join(os.getcwd(), val_ckpt_dir, str(ckpt_id)))
+    for epoch in saved_epochs:
+        shutil.rmtree(os.path.join(os.getcwd(), val_ckpt_dir, str(epoch)))
 
     return TrainResult(
         model=model,

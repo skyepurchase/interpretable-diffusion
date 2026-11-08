@@ -8,57 +8,6 @@ from models.paid import PAID
 from models.phys_vae import gen_mask
 
 
-def augmentation_loss(
-    model: PAID,
-    phys_params: list[Array],
-    y_init: Array,
-    key: Array,
-) -> Array:
-    """
-    TODO: write docstring
-
-    Parameters
-    ----------
-    model : PAID
-        Model to train
-    phys_params : list[Array (B, Z)]
-        Estimated physics parameters
-    tau : Array (B)
-        Diffusion timestep
-    y_init : Array (B, X)
-        The initial condition
-
-    Returns
-    -------
-    loss : Array ()
-        The data augmentation loss
-    """
-    model.eval()
-
-    aug_params = []
-    for param, param_range in zip(phys_params, model.phys_param_ranges):
-        key, aug_key = jax.random.split(key, 2)
-        aug_param = jax.lax.stop_gradient(
-            jax.random.uniform(
-                aug_key, param.shape, minval=param_range[0], maxval=param_range[1]
-            )
-        )
-        aug_params.append(aug_param)
-
-    # (B, X*T)
-    aug_phys_hat = jax.lax.stop_gradient(
-        model.generate_physics(aug_params, jax.lax.stop_gradient(y_init))
-    )
-
-    model.train()
-
-    aug_loss = jnp.zeros(())
-    for phys_func, aug_param in zip(model.denoiser.phys_funcs, aug_params):
-        aug_loss += jnp.square(phys_func(aug_phys_hat) - aug_param).sum(axis=1).mean()
-
-    return aug_loss
-
-
 def discrepancy_loss(x_hats: Array) -> Array:
     """
     TODO: create docstring
@@ -93,7 +42,9 @@ def discrepancy_loss(x_hats: Array) -> Array:
     return masked_disc.sum() / mask.sum()
 
 
-def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
+def paid_loss(
+    model: PAID, data: Array, key: Array, compute_aug: bool = True
+) -> tuple[Array, Array]:
     """
     Container function for the separate losses that define the physics aligned interpretable diffusion training.
 
@@ -105,6 +56,10 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
         The datapoint to calcualte the loss on
     key : PRNG
         Random key
+    compute_aug : bool = True
+        Whether to compute the augmentation loss. Skipping it also skips its
+        ODE solve; the returned total is then the reconstruction + physics +
+        discrepancy subtotal.
 
     Returns
     -------
@@ -146,9 +101,40 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
         .mean()
     )
 
-    phys_traj = model.generate_physics(
-        phys_params, data[:, 0].reshape(-1, model.num_grid_points)
-    )
+    init = data[:, 0].reshape(-1, model.num_grid_points)
+
+    if compute_aug:
+        # Sample the augmentation parameters; the key stream matches the
+        # original standalone augmentation solve exactly
+        key, aug_key = jax.random.split(key, 2)
+        aug_params = []
+        for param, param_range in zip(phys_params, model.phys_param_ranges):
+            aug_key, sample_key = jax.random.split(aug_key, 2)
+            aug_params.append(
+                jax.lax.stop_gradient(
+                    jax.random.uniform(
+                        sample_key,
+                        param.shape,
+                        minval=param_range[0],
+                        maxval=param_range[1],
+                    )
+                )
+            )
+
+        # One solve covers both the physics loss and the augmentation loss:
+        # the two trajectories only differ in parameters and initial
+        # condition, so they are concatenated on the batch axis and split
+        # afterwards
+        merged_params = [
+            jnp.concatenate([param, aug_param], axis=0)
+            for param, aug_param in zip(phys_params, aug_params)
+        ]
+        merged_init = jnp.concatenate([init, init], axis=0)
+        merged_traj = model.generate_physics(merged_params, merged_init)
+        phys_traj = merged_traj[:batch_size]
+    else:
+        phys_traj = model.generate_physics(phys_params, init)
+
     phys_traj = jnp.reshape(phys_traj, phys_pred.shape)
     phys_error = jnp.square(phys_pred - jax.lax.stop_gradient(phys_traj)).sum(axis=-1)
     phys_loss = (
@@ -157,16 +143,24 @@ def paid_loss(model: PAID, data: Array, key: Array) -> tuple[Array, Array]:
 
     disc_loss = model.disc_reg * discrepancy_loss(x_hat)
 
-    key, aug_key = jax.random.split(key, 2)
-    aug_loss = model.aug_reg * augmentation_loss(
-        model,
-        phys_params,
-        data[:, 0].reshape(-1, model.num_grid_points),
-        key=aug_key,
-    )
+    if compute_aug:
+        # (B, X*T)
+        aug_phys_hat = jax.lax.stop_gradient(merged_traj[batch_size:])
+        aug_loss = jnp.zeros(())
+        for phys_func, aug_param in zip(model.denoiser.phys_funcs, aug_params):
+            aug_loss += (
+                jnp.square(phys_func(aug_phys_hat) - aug_param).sum(axis=1).mean()
+            )
 
-    full_loss = reconstruction_loss + phys_loss + disc_loss + aug_loss
+        aug_loss = model.aug_reg * aug_loss
+        full_loss = reconstruction_loss + phys_loss + disc_loss + aug_loss
 
-    return full_loss, jnp.stack(
-        [full_loss, reconstruction_loss, phys_loss, disc_loss, aug_loss]
-    )
+        return full_loss, jnp.stack(
+            [full_loss, reconstruction_loss, phys_loss, disc_loss, aug_loss]
+        )
+
+    # Validation path: the augmentation term and its ODE solve are skipped, so
+    # the total is the reconstruction + physics + discrepancy subtotal
+    full_loss = reconstruction_loss + phys_loss + disc_loss
+
+    return full_loss, jnp.stack([full_loss, reconstruction_loss, phys_loss, disc_loss])
