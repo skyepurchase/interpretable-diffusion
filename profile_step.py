@@ -17,9 +17,12 @@ from datasets import DATASETS
 from models import LOSS_FNS, MODELS
 from utils import load_config
 
-config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/pendulum_paid/base.yaml"
+config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/diffusion_paid/mlp.yaml"
 config = load_config(config_path)
 print(f"Config: {config_path}")
+print(f"JAX backend: {jax.default_backend()}, devices: {jax.devices()}")
+if jax.default_backend() == "cpu":
+    print("WARNING: JAX is running on CPU — GPU effectiveness cannot be checked")
 
 key = jax.random.key(0)
 data_key, key = split(key, num=2)
@@ -136,3 +139,40 @@ n_train, n_val = len(train_loader), len(val_loader)
 per_epoch = ts * n_train + vs * n_val
 print(f"\nper-epoch estimate: {per_epoch:.1f} s  ({ts*1000:.0f}ms x {n_train} train + {vs*1000:.0f}ms x {n_val} val)")
 print(f"full-run estimate ({epochs} epochs): {per_epoch * epochs / 3600:.2f} hours")
+
+# --- GPU effectiveness: async dispatch check ---
+# Submit steps without syncing; the host should run ahead of the device.
+# dispatch/step << execution/step means no per-step host-device sync stalls.
+N = 20
+t0 = time.perf_counter()
+outs = []
+for _ in range(N):
+    k, sub = split(k)
+    outs.append(train_step(model=model, data=batch, optimizer=optimizer, key=sub))
+dispatch = (time.perf_counter() - t0) / N
+t0 = time.perf_counter()
+outs[-1].block_until_ready()
+drain = time.perf_counter() - t0
+print(f"\ndispatch/step: {dispatch*1000:.1f} ms, execution/step: {ts*1000:.1f} ms, drain: {drain*1000:.1f} ms")
+if dispatch > 0.8 * ts:
+    if jax.default_backend() == "cpu":
+        print("dispatch ~= execution: expected on CPU (the device shares host cores);")
+        print("re-run on a GPU machine for a meaningful async-dispatch result")
+    else:
+        print("WARNING: host is NOT running ahead — something syncs every step (check for .item()/block_until_ready/numpy() in the loop)")
+else:
+    print("Host dispatch runs ahead of the device: no per-step sync stalls")
+
+# --- Optional profiler trace: python profile_step.py <config> --trace ---
+if "--trace" in sys.argv:
+    import jax.profiler
+
+    logdir = "./tb_trace"
+    jax.profiler.start_trace(logdir)
+    for _ in range(3):
+        k, sub = split(k)
+        train_step(model=model, data=batch, optimizer=optimizer, key=sub).block_until_ready()
+    jax.profiler.stop_trace()
+    print(f"\nTrace written to {logdir}/ — inspect with: tensorboard --logdir {logdir}")
+    print("Look for: (1) gaps between train steps = host stalls; (2) long chains of")
+    print("tiny kernels inside the ODE scan = launch-latency bound, not FLOP bound")
