@@ -2,81 +2,69 @@ dataset: pivae
 dataset_config:
   dir: ./data/pivae
   system: diffusion
-  batch_size: 16
-  retain_dim: True
+  batch_size: 256
+  retain_dim: true
+  length: 2.0
+  time: 1.0
+  x_grid: 20
+  t_grid: 100
+  phys_param_ranges:
+    - [0.01, 0.1]
+    - [0.01, 0.1]
+  n_samples: 3000
+  test_split: 1000
+  validation_split: 500
+  train_split: 1000
 
 model: paid
 model_config:
-  unet:
-    in_channels: 1
-    ch: 32
-    ch_mult: [1, 2, 2]
-    num_res_blocks: 1
-    attention_resolutions: [2]
-    num_heads: 4
-    activation: swish
-    dropout: True
-    dropout_rate: 0.1
-
   pde:
-    system: diffusion
-    time_dim: 50
-    integral_level: 1.0
-    timestep: 0.05
-    spatial_length: 2.0
-    num_grid_points: 12
+    gen_steps: 50
+    integral_level: 2
     solver: euler
-
     phys_param_ranges:
-      - [0.01, 0.1]
+      - [0.005, 0.2]
 
   aux_funcs:
     - latent_dim: 4
-      in_features: -1
-      features: 32
+      dims: [256, 256, 256, 64, 32]
       act: swish
-      dropout: True
-      dropout_rate: 0.1
 
   unmixer:
-    dims: [64, 64]
+    dims: [256, 256]
     act: swish
-    dropout: True
-    dropout_rate: 0.1
 
   phys_funcs:
     - latent_dim: 1
-      in_features: -1
-      features: 32
+      dims: [256, 256, 256, 64, 32]
       act: swish
-      dropout: True
-      dropout_rate: 0.1
 
   pre_funcs:
     - latent_dim: 4
       dims: [64, 64]
-      act: swish
+      act: elu
 
   post_funcs: []
 
   num_timesteps: 1000
   beta_schedule: linear
-  beta_start: 0.0001
+  beta_start: 1.0e-4
   beta_end: 0.02
 
-  disc_reg: 1e-1
-  phys_reg: 1e-2
-  aug_reg: 1e4
+  disc_reg: 1.0e-1
+  phys_reg: 1.0e-2
+  aug_reg: 1.0e6
 
-  condition: [CONDITION]
-
-  pad:
-    - [1, 1]
-    - [0, 0]
+  condition: 10
+  embed_dim: 128
+  jump: 10
 
 trainer_config:
-  learning_rate: 1e-3
-  eps: 1e-3
-  epochs: 100
+  learning_rate: 1.0e-3
+  eps: 1.0e-3
+  weight_decay: 1.0e-6
+  grad_clip: 5.0
+  epochs: 20000
+  ckpt_interval: 100
 
 checkpoint_dir: checkpoints/diffusion_paid

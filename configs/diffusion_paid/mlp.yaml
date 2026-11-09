@@ -7,7 +7,7 @@ dataset_config:
   length: 2.0
   time: 1.0
   x_grid: 20
-  t_grid: 50
+  t_grid: 100
   phys_param_ranges:
     - [0.01, 0.1]
     - [0.01, 0.1]
@@ -19,6 +19,7 @@ dataset_config:
 model: paid
 model_config:
   pde:
+    gen_steps: 50
     integral_level: 2
     solver: euler
     phys_param_ranges:
@@ -52,7 +53,7 @@ model_config:
 
   disc_reg: 1.0e-1
   phys_reg: 1.0e-2
-  aug_reg: 1.0e4
+  aug_reg: 1.0e6
 
   condition: 10
   embed_dim: 128
@@ -63,6 +64,7 @@ trainer_config:
   eps: 1.0e-3
   weight_decay: 1.0e-6
   grad_clip: 5.0
-  epochs: 100
+  epochs: 20000
+  ckpt_interval: 100
 
 checkpoint_dir: checkpoints/diffusion_paid

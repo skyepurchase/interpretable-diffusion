@@ -4,10 +4,9 @@ from datetime import datetime
 
 import jax
 from flax import nnx
-from jaxtyping import PRNGKeyArray
 
-from datasets import DATASETS
-from datasets.loader import ArrayLoader
+from eval import evaluate
+from main import format_time
 from models import save_model
 from train import train
 from utils import load_config
@@ -17,14 +16,9 @@ def sweep_conditions(
     model_name: str,
     base_config: dict,
     conditions: list[int],
-    train_loader: ArrayLoader,
-    val_loader: ArrayLoader,
     checkpoint_dir: str,
     run_base: str,
-    rngs: nnx.Rngs,
     progress: bool = False,
-    *,
-    key: PRNGKeyArray,
 ):
     """
     Sweep over different condition values.
@@ -37,10 +31,6 @@ def sweep_conditions(
         Base model configuration
     conditions : list[int]
         List of condition values to try
-    train_loader : ArrayLoader
-        Training data loader
-    val_loader : ArrayLoader
-        Validation data loader
     checkpoint_dir : str
         Directory to save checkpoints
     run_base : str
@@ -49,9 +39,11 @@ def sweep_conditions(
         Flax random number generators for model initialization
     progress : bool
         Whether to show progress bars and log metrics to trackio
-    key : PRNGKeyArray
-        PRNG key for reproducibility during training
     """
+    seeds = [354916, 209358, 902408, 881891, 198910]
+    keys = [jax.random.key(seed) for seed in seeds]
+    rngs = [nnx.Rngs(seed) for seed in seeds]
+
     if progress:
         try:
             import trackio
@@ -64,48 +56,52 @@ def sweep_conditions(
     for condition in conditions:
         print(f"\nTRAINING WITH CONDITION PERIOD k={condition}\n")
 
-        # Create config for this condition
         config = copy.deepcopy(base_config)
         config["model_config"]["condition"] = condition
 
-        # Build run name with condition
-        stamp = datetime.now().strftime("%m%d-%H%M")
-        run_name = f"{run_base}_{stamp}_{condition}"
+        for key, rng, seed in zip(keys, rngs, seeds):
+            stamp = datetime.now().strftime("%m%d-%H%M")
+            run_name = f"{run_base}_{condition}_{seed}"
 
-        # Initialize trackio for this condition
-        if progress:
-            trackio.init(
-                project="Interpretable Diffusion",
-                name=run_name,
-                config={
-                    "condition": condition,
-                    "model": model_name,
-                    "dataset": config.get("dataset", "pivae"),
-                    **config.get("trainer_config", {}),
-                },
+            if progress:
+                trackio.init(
+                    project="Interpretable Diffusion",
+                    name=run_name,
+                    config={
+                        "condition": condition,
+                        "model": model_name,
+                        "dataset": config.get("dataset", "pivae"),
+                        **config.get("trainer_config", {}),
+                    },
+                )
+
+            train_key, eval_key = jax.random.split(key, num=2)
+
+            result = train(config, rngs=rng, progress=progress, key=train_key)
+
+            print("\nSaving model...")
+            save_model(result.model, checkpoint_dir, stamp)
+            print("Saved.")
+
+            print("\nEvaluating...")
+            forecast_mae, coeff_mae = evaluate(
+                result.model, result.val_loader, args.progress, key=eval_key
             )
 
-        # Split key for this condition
-        key, subkey = jax.random.split(key)
+            print(
+                f"""\nCondition {condition} complete:
+Mean-absolute-error={forecast_mae}
+Coefficient-error={coeff_mae}
+Final-loss={result.final_loss:.2E}
+Best-loss={result.best_loss:.2E}
+Best-epoch={result.best_epoch}
+Train-time={format_time(result.train_time)}
+Model={config["model"]}
+Dataset={config["dataset"]}"""
+            )
 
-        # Run training with rngs
-        result = train(config, rngs=rngs, progress=progress, key=subkey)
-
-        # Save model
-        print("\nSaving model...")
-        save_model(result.model, checkpoint_dir, stamp)
-        print("Saved.")
-
-        print(
-            f"\nCondition {condition} complete:"
-            f" Final loss: {result.final_loss:.2E}"
-            f" Best loss: {result.best_loss:.2E}"
-            f" Best epoch: {result.best_epoch}"
-            f" Train time: {result.train_time:.2f}s"
-        )
-
-        if progress:
-            trackio.finish()
+            if progress:
+                trackio.finish()
 
 
 if __name__ == "__main__":
@@ -118,19 +114,10 @@ if __name__ == "__main__":
         help="The condition periods to try",
         required=True,
     )
-    parser.add_argument("-s", "--seed", type=int, help="seed for the run", default=0)
     parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
     config = load_config(args.config)
     print("\nConfig loaded.")
-
-    key = jax.random.key(args.seed)
-    rngs = nnx.Rngs(args.seed)
-
-    data_key, key = jax.random.split(key)
-    train_loader, val_loader, _ = DATASETS[config["dataset"]](
-        **config["dataset_config"], key=data_key
-    )
 
     run_name = "_".join(
         [
@@ -147,11 +134,7 @@ if __name__ == "__main__":
         model_name=config["model"],
         base_config=config,
         conditions=args.conditions,
-        train_loader=train_loader,
-        val_loader=val_loader,
         checkpoint_dir=config["checkpoint_dir"],
         run_base=run_name,
-        rngs=rngs,
         progress=args.progress,
-        key=key,
     )
