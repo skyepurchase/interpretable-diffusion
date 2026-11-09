@@ -470,7 +470,7 @@ def get_pivae(
         "train_coeff",
     )
 
-    # The manifest holds one [grid_size.<t_grid>] section per cache
+    # The manifest holds one [grid_size.<t_grid>] section per dataset
     manifest = {}
     if os.path.exists(manifest_path):
         with open(manifest_path, "rb") as f:

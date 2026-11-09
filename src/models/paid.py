@@ -514,7 +514,7 @@ class PAID(nnx.Module):
         self.condition = condition
 
         # Frames denoised past the condition
-        gen_steps = pde.get("gen_steps", t_grid - self.condition)
+        gen_steps = pde["gen_steps"]
         assert gen_steps > 0, (
             f"Generation length must be positive, received {gen_steps}. "
             "Legacy configs derive it as t_grid - condition; add pde.gen_steps "
