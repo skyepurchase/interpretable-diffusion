@@ -50,9 +50,7 @@ class ArrayLoader:
         for start in range(0, n, self.batch_size):
             idx = order[start : start + self.batch_size]
             if len(idx) < self.batch_size:
-                # Pad the tail batch by wrapping around the permutation so
-                # every batch has the same shape; a distinct tail shape
-                # would trigger an extra JIT compile of the train/val step
+                # Ensure every batch is the same size
                 pad = self.batch_size - len(idx)
                 idx = jnp.concatenate([idx, order[:pad]], axis=0)
             yield self.data[idx], self.coeffs[idx]

@@ -286,7 +286,6 @@ def visualise(
     _, _, test_loader = DATASETS[dataset](**dataset_config, key=data_key)
     inputs = next(iter(test_loader))[0][:num]
 
-    # Drop any trailing channel axis; PAID expects (B, T, X)
     if inputs.ndim == 4:
         inputs = jnp.squeeze(inputs, axis=-1)
 

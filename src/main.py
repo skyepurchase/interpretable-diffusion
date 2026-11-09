@@ -32,11 +32,9 @@ def main() -> None:
     config = load_config(args.config)
     print("\nConfig loaded.")
 
-    # Own the seed and initialize rngs
     key = jax.random.key(args.seed)
     rngs = nnx.Rngs(args.seed)
 
-    # Compute run name and stamp
     stamp = datetime.now().strftime("%m%d-%H%M")
     run_name = "_".join(
         [
@@ -48,10 +46,8 @@ def main() -> None:
     )
     run_name = run_name.replace("__", "_")
 
-    # Split key into train and eval keys
     train_key, eval_key = split(key, num=2)
 
-    # Initialize trackio once
     if args.progress:
         try:
             import trackio
@@ -74,24 +70,20 @@ def main() -> None:
 
     print("\nSetup complete. Starting training...")
 
-    # Train with rngs and train_key
     result = train(config, rngs=rngs, progress=args.progress, key=train_key)
 
-    # Save model
     print("\nSaving model...")
     save_model(result.model, config["checkpoint_dir"], stamp)
     print("Saved.")
 
-    # Evaluate
     print("\nEvaluating...")
     forecast_mae, coeff_mae = evaluate(
         result.model, result.val_loader, args.progress, key=eval_key
     )
 
-    # Print the key=value report regardless of --progress
     print(
-        f"""\nMean-absolute-error={forecast_mae:.2E}
-Coefficient-error={coeff_mae:.2E}
+        f"""\nMean-absolute-error={forecast_mae}
+Coefficient-error={coeff_mae}
 Final-loss={result.final_loss:.2E}
 Best-loss={result.best_loss:.2E}
 Best-epoch={result.best_epoch}

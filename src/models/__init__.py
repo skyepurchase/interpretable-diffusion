@@ -87,3 +87,5 @@ def save_model(model: nnx.Module, folder: str, stamp: str) -> None:
     checkpointer.save(latest_path, state)
 
     checkpointer.wait_until_finished()
+
+    print(f"Saved model to {perm_path} and {latest_path}.")
