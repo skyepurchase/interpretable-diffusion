@@ -19,7 +19,7 @@ dataset_config:
 model: paid
 model_config:
   pde:
-    integral_level: 1
+    integral_level: 2
     solver: euler
     phys_param_ranges:
       - [0.005, 0.2]
