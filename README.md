@@ -28,13 +28,13 @@ The script takes a seed value with `-s`.
 
 To train PAID and save a checkpoint run the following command
 ```
-uv run src/main.py -c configs/pendulum_paid/smoke.yaml
+uv run src/main.py -c configs/pendulum_paid/mlp.yaml
 ```
 `main.py` saves the trained model under the config's `checkpoint_dir` (a timestamped folder and `latest`); `train.py` does not persist a model.
 
 To then visualise generated samples from the trained model run
 ```
-uv run src/visualise.py -c configs/pendulum_paid/smoke.yaml -o reports/vis
+uv run src/visualise.py -c configs/pendulum_paid/mlp.yaml -o reports/vis
 ```
 Visualisation supports PAID models only. 2D datasets (e.g. `configs/diffusion_paid`) render a grid of PAID output, target, and absolute error with shared colour scales and colorbars; 1D datasets (e.g. `configs/pendulum_paid`) render overlaid output/target lineplots. Both mark the condition/generated boundary with a vline in the key.
 
