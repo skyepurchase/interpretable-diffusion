@@ -1,0 +1,65 @@
+dataset: pivae
+dataset_config:
+  dir: ./data/pivae
+  system: pendulum
+  batch_size: 200
+  retain_dim: true
+  length: 0.0
+  time: 2.5
+  x_grid: 1
+  t_grid: 50
+  n_samples: 3000
+  test_split: 1000
+  validation_split: 500
+  train_split: 1000
+
+model: phys_vae
+model_config:
+  encoder:
+    aux_funcs:
+      - latent_dim: 1
+        dims: [128, 128, 256, 64, 32]
+        act: elu
+      - latent_dim: 2
+        dims: [128, 128, 256, 64, 32]
+        act: elu
+    unmixer:
+      latent_dim: 50
+      dims: [128, 128]
+      act: elu
+      residual: true
+    phys_funcs:
+      - latent_dim: 1
+        dims: [128, 128, 256, 64, 32]
+        act: elu
+
+  decoder:
+    pre_funcs:
+      - latent_dim: 1
+        dims: [64, 64]
+        act: elu
+    post_funcs:
+      - latent_dim: 2
+        dims: [128, 128]
+        act: elu
+    x_log_sigma: 0.01
+
+  phys_param_ranges:
+    - [0.392, 3.53]
+
+  integral_level: 1
+  ode_solver: euler
+
+  kl_balance: 1.0
+  alpha: 1.0e-2
+  beta: 1.0e-3
+  gamma: 1.0e-1
+
+trainer_config:
+  learning_rate: 1.0e-3
+  eps: 1.0e-3
+  weight_decay: 1.0e-6
+  grad_clip: 5.0
+  epochs: 5000
+
+checkpoint_dir: checkpoints/pendulum_vae
