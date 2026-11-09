@@ -14,15 +14,7 @@ To train the VAE run the following command
 ```
 uv run src/train.py -c configs/mnist_vae/08JAN26.yaml
 ```
-To then visualise the VAE's reconstruction of unseen digits run
-```
-uv run src/visualise.py -c configs/mnist_vae/08JAN26.yaml
-```
-
-Both scripts take a seed value with `-s`. `visualise.py` has more option which can be found with
-```
-uv run src/visualise.py --help
-```
+The script takes a seed value with `-s`.
 
 ### DDIM
 
@@ -30,12 +22,23 @@ To train the DDIM run the following command
 ```
 uv run src/train.py -c configs/mnist_ddim/26JAN16.yaml
 ```
-To then visualise generated samples from the trained DDIM run
-```
-uv run src/visualise.py -c configs/mnist_ddim/26JAN16.yaml
-```
+The script takes a seed value with `-s`.
 
-Both scripts take a seed value with `-s`. `visualise.py` has more option which can be found with
+## PAID
+
+To train PAID and save a checkpoint run the following command
+```
+uv run src/main.py -c configs/pendulum_paid/mlp.yaml
+```
+`main.py` saves the trained model under the config's `checkpoint_dir` (a timestamped folder and `latest`); `train.py` does not persist a model.
+
+To then visualise generated samples from the trained model run
+```
+uv run src/visualise.py -c configs/pendulum_paid/mlp.yaml -o reports/vis
+```
+Visualisation supports PAID models only. 2D datasets (e.g. `configs/diffusion_paid`) render a grid of PAID output, target, and absolute error with shared colour scales and colorbars; 1D datasets (e.g. `configs/pendulum_paid`) render overlaid output/target lineplots. Both mark the condition/generated boundary with a vline in the key.
+
+Both scripts take a seed value with `-s`. `visualise.py` has more options, notably `--num` for the number of outputs to visualise, which can be found with
 ```
 uv run src/visualise.py --help
 ```
