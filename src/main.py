@@ -9,6 +9,7 @@ from eval import evaluate
 from models import save_model
 from train import train
 from utils import load_config
+from visualise import visualise
 
 
 def format_time(seconds: float) -> str:
@@ -26,6 +27,7 @@ def format_time(seconds: float) -> str:
 def main() -> None:
     parser = ArgumentParser()
     parser.add_argument("-c", "--config", help="path to config file", required=True)
+    parser.add_argument("-o", "--output", help="path to config folder", required=True)
     parser.add_argument("-s", "--seed", type=int, help="seed for the run", default=0)
     parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
@@ -46,7 +48,7 @@ def main() -> None:
     )
     run_name = run_name.replace("__", "_")
 
-    train_key, eval_key = split(key, num=2)
+    train_key, eval_key, vis_key = split(key, num=3)
 
     if args.progress:
         try:
@@ -78,7 +80,18 @@ def main() -> None:
 
     print("\nEvaluating...")
     forecast_mae, coeff_mae = evaluate(
-        result.model, result.val_loader, args.progress, key=eval_key
+        result.model, result.test_loader, args.progress, key=eval_key
+    )
+
+    print("\nVisualising...")
+    visualise(
+        result.model,
+        result.test_loader,
+        folder=args.output,
+        length=config["dataset_config"]["length"],
+        stamp=stamp,
+        num=3,
+        key=vis_key,
     )
 
     print(
@@ -89,7 +102,8 @@ Best-loss={result.best_loss:.2E}
 Best-epoch={result.best_epoch}
 Train-time={format_time(result.train_time)}
 Model={config["model"]}
-Dataset={config["dataset"]}"""
+Dataset={config["dataset"]}
+Stamp={stamp}"""
     )
 
     if args.progress:
