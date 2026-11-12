@@ -4,12 +4,41 @@ from argparse import ArgumentParser
 
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
+import seaborn as sns
 from flax import nnx
 
 from datasets import DATASETS
 from models import load_model
 from models.paid import PAID
 from utils import load_config
+
+sns.set_theme(
+    font="DejaVu Sans",
+    rc={
+        "axes.axisbelow": False,
+        "axes.edgecolor": "lightgrey",
+        "axes.facecolor": "None",
+        "axes.grid": False,
+        "axes.labelcolor": "dimgrey",
+        "axes.spines.right": False,
+        "axes.spines.top": False,
+        "figure.facecolor": "white",
+        "lines.solid_capstyle": "round",
+        "patch.edgecolor": "w",
+        "patch.force_edgecolor": True,
+        "text.color": "dimgrey",
+        "xtick.bottom": False,
+        "xtick.color": "dimgrey",
+        "xtick.direction": "out",
+        "xtick.top": False,
+        "ytick.color": "dimgrey",
+        "ytick.direction": "out",
+        "ytick.left": False,
+        "ytick.right": False,
+    },
+)
+sns.set_palette(sns.color_palette("muted"))
 
 
 def generate(
@@ -50,6 +79,8 @@ def generate(
         requested sample.
     test_data : Array
         The full unshuffled test set
+    indices : Array (S)
+        The test-set indices the outputs correspond to
     """
     rngs = nnx.Rngs(seed)
     key = jax.random.key(seed)
@@ -96,7 +127,53 @@ def generate(
 
         print(f"Condition {condition}: window {window}, output {outputs[-1][2].shape}")
 
-    return outputs, test_data
+    return outputs, test_data, indices
+
+
+def page_one_figure(
+    truth: jax.Array,
+    times: jax.Array,
+    outputs: list[tuple[int, int, jax.Array]],
+) -> plt.Figure:
+    """
+    Render the merged observation-period figure for one test sample.
+
+    The ground truth is drawn in SandyBrown up to the largest condition
+    (the observations) and in black beyond it (the truth). Each model's
+    generated frames are overlaid as a pastel line starting at its own
+    condition, in ascending order of condition.
+
+    Parameters
+    ----------
+    truth : Array (W)
+        The ground-truth frames of the sample
+    times : Array (W)
+        The time of each frame in seconds
+    outputs : list[(condition, window, out)]
+        One entry per model in ascending order of condition. ``out`` is an
+        Array (window - condition) holding the generated frames
+
+    Returns
+    -------
+    fig : Figure
+        The created figure
+    """
+    k_max = outputs[-1][0]
+
+    fig, ax = plt.subplots(figsize=(12, 3))
+    fig.tight_layout()
+
+    ax.plot(times[: k_max + 1], truth[: k_max + 1], color="sandybrown")
+    ax.plot(times[k_max:], truth[k_max:], color="black")
+
+    palette = sns.color_palette("pastel", len(outputs))
+    for (condition, window, out), colour in zip(outputs, palette):
+        ax.plot(times[condition:window], out, color=colour)
+
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel("angle")
+
+    return fig
 
 
 if __name__ == "__main__":
@@ -138,7 +215,7 @@ if __name__ == "__main__":
     exp_cfg = load_config(args.config)
 
     print("Generating outputs...\n")
-    outputs, test_data = generate(
+    outputs, test_data, indices = generate(
         exp_cfg,
         args.conditions,
         args.checkpoints,
@@ -147,4 +224,26 @@ if __name__ == "__main__":
         seed=args.seed,
     )
 
-    print("\nDone.")
+    print("Creating visualisation...\n")
+    frame_dt = exp_cfg["dataset_config"]["time"] / exp_cfg["dataset_config"]["t_grid"]
+    max_window = max(window for _, window, _ in outputs)
+    times = jnp.arange(max_window) * frame_dt
+
+    if not os.path.isdir(args.output):
+        os.makedirs(args.output)
+
+    for i, idx in enumerate(indices):
+        truth = test_data[idx, :max_window]
+        if truth.ndim > 1:
+            truth = jnp.squeeze(truth, axis=-1)
+
+        fig = page_one_figure(truth, times, [(c, w, out[i]) for c, w, out in outputs])
+
+        perm = os.path.join(args.output, f"page_one_s{int(idx):03d}.{args.format}")
+        plt.savefig(perm, format=args.format)
+        if i == len(indices) - 1:
+            latest = os.path.join(args.output, f"latest.{args.format}")
+            plt.savefig(latest, format=args.format)
+        plt.close(fig)
+
+    print(f"Visualisations saved to {args.output}.")
