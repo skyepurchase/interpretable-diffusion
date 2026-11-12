@@ -1,6 +1,8 @@
 import copy
+import os
 from argparse import ArgumentParser
 from datetime import datetime
+from typing import Optional
 
 import jax
 from flax import nnx
@@ -19,6 +21,7 @@ def sweep_conditions(
     checkpoint_dir: str,
     run_base: str,
     progress: bool = False,
+    output_file: Optional[str] = None,
 ):
     """
     Sweep over different condition values.
@@ -53,6 +56,11 @@ def sweep_conditions(
                 "`uv sync --extra dashboard`"
             ) from err
 
+    if output_file:
+        out_dir = os.path.join(*output_file.split("/")[:-1])
+        if not os.path.isdir(out_dir):
+            os.makedirs(out_dir)
+
     for condition in conditions:
         print(f"\nTRAINING WITH CONDITION PERIOD k={condition}\n")
 
@@ -85,11 +93,10 @@ def sweep_conditions(
 
             print("\nEvaluating...")
             forecast_mae, coeff_mae = evaluate(
-                result.model, result.val_loader, args.progress, key=eval_key
+                result.model, result.test_loader, args.progress, key=eval_key
             )
 
-            print(
-                f"""\nCondition {condition} complete:
+            report = f"""\nCondition {condition}:{seed} complete:
 Mean-absolute-error={forecast_mae}
 Coefficient-error={coeff_mae}
 Final-loss={result.final_loss:.2E}
@@ -97,16 +104,20 @@ Best-loss={result.best_loss:.2E}
 Best-epoch={result.best_epoch}
 Train-time={format_time(result.train_time)}
 Model={config["model"]}
-Dataset={config["dataset"]}"""
-            )
+Dataset={config["dataset"]}
+Stamp={stamp}"""
 
-            if progress:
-                trackio.finish()
+            print(report)
+            if output_file:
+                with open(output_file, "a") as out_file:
+                    out_file.write(report)
+                    out_file.write("\n\n")
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-c", "--config", help="path to config file", required=True)
+    parser.add_argument("-o", "--output", help="path to output file")
     parser.add_argument(
         "--conditions",
         type=int,
@@ -137,4 +148,5 @@ if __name__ == "__main__":
         checkpoint_dir=config["checkpoint_dir"],
         run_base=run_name,
         progress=args.progress,
+        output_file=args.output,
     )
