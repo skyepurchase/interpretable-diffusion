@@ -95,7 +95,7 @@ if __name__ == "__main__":
     )
 
     data_key, key = jax.random.split(key)
-    _, test_loader, _ = DATASETS[config["dataset"]](
+    _, _, test_loader = DATASETS[config["dataset"]](
         **config["dataset_config"], key=data_key
     )
 

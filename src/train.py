@@ -26,7 +26,7 @@ class TrainResult:
     """Result of a training run."""
 
     model: nnx.Module
-    val_loader: ArrayLoader
+    test_loader: ArrayLoader
     final_loss: float
     best_loss: float
     best_epoch: int
@@ -72,7 +72,7 @@ def train(
         Dataclass containing the trained model, validation loader, and training metrics
     """
     data_key, key = split(key, num=2)
-    train_loader, val_loader, _ = DATASETS[config["dataset"]](
+    train_loader, val_loader, test_loader = DATASETS[config["dataset"]](
         **config["dataset_config"], key=data_key
     )
 
@@ -239,7 +239,7 @@ def train(
 
     return TrainResult(
         model=model,
-        val_loader=val_loader,
+        test_loader=test_loader,
         final_loss=final_loss,
         best_loss=best_loss,
         best_epoch=best_epoch,

@@ -4,7 +4,7 @@ from typing import Callable
 
 import jax
 import jax.numpy as jnp
-from diffrax import Euler, ODETerm, SaveAt, diffeqsolve
+from diffrax import Dopri8, ODETerm, SaveAt, diffeqsolve
 from diffrax._custom_types import RealScalarLike
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
@@ -140,7 +140,7 @@ def generate_pendulum_data(
     # sol : (T, B, X)
     sol = diffeqsolve(
         ODETerm(ode),
-        Euler(),
+        Dopri8(),
         t0=0,
         t1=time,
         dt0=dt,
@@ -182,11 +182,9 @@ def diffusion_PDE(ds: Array) -> Callable[[RealScalarLike, PyTree, PyTree], PyTre
 
         diff_coeff, adv_coeff = jnp.split(args, 2, axis=-1)
 
-        dy_ds = jnp.gradient(y, ds, axis=1)
-        assert not isinstance(dy_ds, list)
-
-        d2y_ds2 = jnp.gradient(dy_ds, ds, axis=1)
-        assert not isinstance(d2y_ds2, list)
+        padded = jnp.pad(y, ((0, 0), (1, 1)), mode="edge")
+        dy_ds = (padded[:, 2:] - padded[:, :-2]) / (2 * ds)
+        d2y_ds2 = (padded[:, 2:] - 2 * padded[:, 1:-1] + padded[:, :-2]) / (ds**2)
 
         dy_dt = diff_coeff * d2y_ds2 - adv_coeff * dy_ds
 
@@ -263,7 +261,7 @@ def generate_diffusion_data(
 
     sol = diffeqsolve(
         ODETerm(ode),
-        Euler(),
+        Dopri8(),
         t0=0,
         t1=time,
         dt0=dt,
@@ -412,7 +410,7 @@ def generate_burgers_data(
     # sol : (T, B, X)
     sol = diffeqsolve(
         ODETerm(ode),
-        Euler(),
+        Dopri8(),
         t0=0,
         t1=time,
         dt0=dt,

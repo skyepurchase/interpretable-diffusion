@@ -1,6 +1,4 @@
 import os
-from argparse import ArgumentParser
-from datetime import datetime
 
 import jax
 import jax.numpy as jnp
@@ -8,17 +6,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from flax import nnx
+from jax._src.array import PRNGKeyArray
 
 from datasets import DATASETS
+from datasets.loader import ArrayLoader
 from models import load_model
 from models.paid import PAID
 from utils import load_config
 
-NOW = datetime.now().strftime("%y%m%d_%H%M%S")
-
-
 sns.set_theme(
     font="DejaVu Sans",
+    font_scale=1.75,
     rc={
         "axes.axisbelow": False,
         "axes.edgecolor": "lightgrey",
@@ -80,17 +78,10 @@ def visualise_2d(
     fig : Figure
         The created figure
     """
-    # (B, T, X) -> (B, X, T) so time runs horizontally
     out = jnp.permute_dims(out, (0, 2, 1))
     target = jnp.permute_dims(target, (0, 2, 1))
     error = jnp.abs(out - target)
 
-    # Output and target share one colour scale
-    vmin = float(jnp.minimum(out.min(), target.min()))
-    vmax = float(jnp.maximum(out.max(), target.max()))
-
-    # Align cell centres with the sample points: frame i at times[i],
-    # grid point j at j * length / (X - 1)
     frame_dt = float(times[1] - times[0])
     x_grid = out.shape[1]
     ds = length / (x_grid - 1) if length > 0 else 1.0
@@ -103,41 +94,48 @@ def visualise_2d(
         y_max,
     )
 
-    fig, axes = plt.subplots(num, 3, figsize=(12, 2.5 * num), sharex=True, sharey=True)
-    fig.tight_layout()
+    fig, axes = plt.subplots(num, 3, figsize=(15, 2.0 * num), sharex=True, sharey=True)
+    fig.subplots_adjust(
+        left=0.07, right=0.88, bottom=0.15, top=0.94, wspace=0.20, hspace=0.32
+    )
     axes = np.atleast_2d(axes)
 
-    images = []
     for i, row in enumerate(axes):
-        images.append(
-            [
-                row[0].imshow(
-                    out[i],
-                    vmin=vmin,
-                    vmax=vmax,
-                    cmap="viridis",
-                    origin="lower",
-                    extent=extent,
-                    aspect="auto",
-                ),
-                row[1].imshow(
-                    target[i],
-                    vmin=vmin,
-                    vmax=vmax,
-                    cmap="viridis",
-                    origin="lower",
-                    extent=extent,
-                    aspect="auto",
-                ),
-                row[2].imshow(
-                    error[i],
-                    cmap="magma",
-                    origin="lower",
-                    extent=extent,
-                    aspect="auto",
-                ),
-            ]
+        vmin = float(jnp.minimum(out[i].min(), target[i].min()))
+        vmax = float(jnp.maximum(out[i].max(), target[i].max()))
+
+        img = row[0].imshow(
+            out[i],
+            vmin=vmin,
+            vmax=vmax,
+            cmap="viridis",
+            origin="lower",
+            extent=extent,
+            aspect="auto",
         )
+        row[1].imshow(
+            target[i],
+            vmin=vmin,
+            vmax=vmax,
+            cmap="viridis",
+            origin="lower",
+            extent=extent,
+            aspect="auto",
+        )
+
+        pos = row[2].get_position()
+        row[2].set_position([pos.x0 + 0.025, pos.y0, pos.width, pos.height])
+        err = row[2].imshow(
+            error[i],
+            cmap="magma",
+            origin="lower",
+            extent=extent,
+            aspect="auto",
+        )
+
+        fig.colorbar(img, cax=row[1].inset_axes([1.025, 0, 0.025, 1]))
+        fig.colorbar(err, cax=row[2].inset_axes([1.025, 0, 0.025, 1]))
+
         for ax in row:
             ax.axvline(
                 condition_time,
@@ -150,16 +148,14 @@ def visualise_2d(
     axes[0, 0].set_title("PAID output")
     axes[0, 1].set_title("Target")
     axes[0, 2].set_title("Absolute error")
-    axes[0, 0].legend(loc="upper right")
+    axes[0, 0].legend(
+        loc="upper right", labelcolor="white", markerscale=5, frameon=False
+    )
 
     for ax in axes[-1]:
         ax.set_xlabel("time (s)")
     for row in axes:
         row[0].set_ylabel("x")
-
-    # Colorbars to the right of the target and error columns
-    fig.colorbar(images[-1][1], ax=list(axes[:, 1]), location="right")
-    fig.colorbar(images[-1][2], ax=list(axes[:, 2]), location="right")
 
     return fig
 
@@ -200,8 +196,10 @@ def visualise_1d(
     if target.ndim == 3:
         target = jnp.squeeze(target, axis=-1)
 
-    fig, axes = plt.subplots(num, 1, figsize=(12, 2 * num), sharex=True, sharey=True)
-    fig.tight_layout()
+    fig, axes = plt.subplots(num, 1, figsize=(12, 3 * num), sharex=True, sharey=True)
+    fig.subplots_adjust(
+        left=0.1, right=0.98, bottom=0.1, top=0.95, wspace=0.20, hspace=0.32
+    )
     axes = np.atleast_1d(axes)
 
     for i, ax in enumerate(axes):
@@ -223,88 +221,81 @@ def visualise_1d(
 
 
 def visualise(
-    model: str,
-    model_config: dict,
-    dataset: str,
-    dataset_config: dict,
-    checkpoint_dir: str,
+    model: PAID,
+    test_loader: ArrayLoader,
     folder: os.PathLike | str,
+    length: float,
+    stamp: str,
     format: str = "png",
-    checkpoint: str = "latest",
     num: int = 5,
-    seed: int = 0,
-    **_,
+    *,
+    key: PRNGKeyArray,
 ) -> None:
     """
     Visualise the output produced by a trained PAID model.
 
     Parameters
     ----------
-    model : str
-        The name of the model, must be "paid"
-    model_config : dict
-        The config of the trained model
-    dataset : str
-        The name of the dataset
-    dataset_config : dict
-        The config of the dataset
-    checkpoint_dir : str
-        The directory the checkpoint is stored in
+    model : PAID
+        The trained model to generate visualisations
+    test_loader : ArrayLoader
+        The test set loader
     folder : os.PathLike | str
         The output folder for the images
+    length : float
+        The length of the dimension
+    stamp : str
+        The timestamp for this run
     format : str
         The output image format
-    checkpoint : str
-        The checkpoint file to load
     num : int
         The number of outputs to visualise
-    seed : int
-        The seed for the run
+    key : PRNGKeyArray
+        The random key
     """
     print("Setting up visualisation...\n")
-    rngs = nnx.Rngs(seed)
-    key = jax.random.key(seed)
+    gen_key, sample_key = jax.random.split(key, num=2)
 
     if not os.path.isdir(folder):
         os.makedirs(folder)
 
-    perm = os.path.join(folder, f"{NOW}.{format}")
+    perm = os.path.join(folder, f"{model.condition}_{stamp}.{format}")
     latest = os.path.join(folder, f"latest.{format}")
 
-    loaded_model = load_model(
-        model,
-        model_config,
-        dataset_config,
-        os.path.join(os.getcwd(), checkpoint_dir, checkpoint),
-        rngs=rngs,
-    )
-    assert isinstance(loaded_model, PAID), (
-        f"Visualisation supports PAID models but received {type(loaded_model).__name__}."
+    assert isinstance(model, PAID), (
+        f"Visualisation supports PAID models but received {type(model).__name__}."
     )
 
-    data_key = jax.random.key(0)
-    _, _, test_loader = DATASETS[dataset](**dataset_config, key=data_key)
-    inputs = next(iter(test_loader))[0][:num]
+    inputs = test_loader.data
 
     if inputs.ndim == 4:
         inputs = jnp.squeeze(inputs, axis=-1)
 
-    # Slice inputs to PAID's window
-    inputs = inputs[:, : loaded_model.window]
+    inputs = inputs[:, : model.window]
 
     print("Generating samples...\n")
-    out, _ = loaded_model(inputs, key)
+    out, _ = model(inputs, gen_key)
 
-    # Real time of each frame and of the condition/generated boundary
-    frame_dt = dataset_config["time"] / dataset_config["t_grid"]
-    times = jnp.arange(loaded_model.window) * frame_dt
-    condition_time = loaded_model.condition * frame_dt
+    err = jnp.absolute(out[:, model.condition :] - inputs[:, model.condition :]).mean(
+        (1, 2)
+    )
+    err_mean = err.mean()
+    err_std = err.std()
+    print(err_mean, err_std, jnp.min(err))
+
+    best_sample = jnp.arange(inputs.shape[0])[err < err_mean]
+    print(best_sample.shape)
+    ids = jax.random.permutation(sample_key, best_sample)[:num]
+
+    inputs = inputs[ids]
+    out = out[ids]
+
+    times = jnp.arange(model.window) * model.dt
+    condition_time = model.condition * model.dt
 
     print("Creating visualisation...\n")
-    if dataset_config["x_grid"] > 1:
-        fig = visualise_2d(
-            out, inputs, times, condition_time, dataset_config["length"], num
-        )
+    if model.num_grid_points > 1:
+        fig = visualise_2d(out, inputs, times, condition_time, length, num)
     else:
         fig = visualise_1d(out, inputs, times, condition_time, num)
 
@@ -316,6 +307,11 @@ def visualise(
 
 
 if __name__ == "__main__":
+    from argparse import ArgumentParser
+    from datetime import datetime
+
+    NOW = datetime.now().strftime("%y%m%d_%H%M%S")
+
     parser = ArgumentParser()
     parser.add_argument("-c", "--config", help="path to config file", required=True)
     parser.add_argument(
@@ -323,7 +319,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--format", help="output image format", default="png")
     parser.add_argument(
-        "--checkpoint", help="checkpoint file in YYMMDD_HHMMSS format", default="latest"
+        "--checkpoint",
+        help="the observation period the model was trained on",
+        default="latest",
     )
     parser.add_argument(
         "-s", "--seed", type=int, help="the seed for the run", default=0
@@ -336,13 +334,31 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    exp_cfg = load_config(args.config)
+    config = load_config(args.config)
+
+    rngs = nnx.Rngs(args.seed)
+    key = jax.random.key(args.seed)
+    vis_key, data_key = jax.random.split(key, num=2)
+
+    model = load_model(
+        config["model"],
+        config["model_config"],
+        config["dataset_config"],
+        os.path.join(os.getcwd(), config["checkpoint_dir"], args.checkpoint),
+        rngs=rngs,
+    )
+
+    _, _, test_loader = DATASETS[config["dataset"]](
+        **config["dataset_config"], key=data_key
+    )
 
     visualise(
-        **exp_cfg,
+        model,
+        test_loader,
         folder=args.output,
+        length=config["dataset_config"]["length"],
+        stamp=NOW,
         format=args.format,
-        checkpoint=args.checkpoint,
         num=args.num,
-        seed=args.seed,
+        key=vis_key,
     )
