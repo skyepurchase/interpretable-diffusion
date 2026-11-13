@@ -2,10 +2,10 @@ dataset: pivae
 dataset_config:
   dir: ./data/pivae
   system: diffusion
-  batch_size: 64
+  batch_size: 256
   retain_dim: true
   length: 2.0
-  time: 1.0
+  time: 2.0
   x_grid: 20
   t_grid: 100
   phys_param_ranges:
@@ -42,7 +42,7 @@ model_config:
   pre_funcs:
     - latent_dim: 4
       dims: [64, 64]
-      act: elu
+      act: swish
 
   post_funcs: []
 
