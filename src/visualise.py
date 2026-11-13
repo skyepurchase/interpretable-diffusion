@@ -196,8 +196,10 @@ def visualise_1d(
     if target.ndim == 3:
         target = jnp.squeeze(target, axis=-1)
 
-    fig, axes = plt.subplots(num, 1, figsize=(12, 2 * num), sharex=True, sharey=True)
-    fig.tight_layout()
+    fig, axes = plt.subplots(num, 1, figsize=(12, 3 * num), sharex=True, sharey=True)
+    fig.subplots_adjust(
+        left=0.1, right=0.98, bottom=0.1, top=0.95, wspace=0.20, hspace=0.32
+    )
     axes = np.atleast_1d(axes)
 
     for i, ax in enumerate(axes):
@@ -281,7 +283,7 @@ def visualise(
     err_std = err.std()
     print(err_mean, err_std, jnp.min(err))
 
-    best_sample = jnp.arange(inputs.shape[0])[err < err_mean - err_std]
+    best_sample = jnp.arange(inputs.shape[0])[err < err_mean]
     print(best_sample.shape)
     ids = jax.random.permutation(sample_key, best_sample)[:num]
 
