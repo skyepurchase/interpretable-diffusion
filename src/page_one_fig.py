@@ -122,7 +122,7 @@ def generate(
             out, _ = loaded_model(batch, key)
             if out.ndim == 3:
                 out = jnp.squeeze(out, axis=-1)
-            outs.append(out[:, condition:])
+            outs.append(out[:, condition - 1 :])
         outputs.append((condition, window, jnp.concatenate(outs, axis=0)))
 
         print(f"Condition {condition}: window {window}, output {outputs[-1][2].shape}")
@@ -158,17 +158,14 @@ def page_one_figure(
     fig : Figure
         The created figure
     """
-    k_max = outputs[-1][0]
-
     fig, ax = plt.subplots(figsize=(12, 3))
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.07, right=0.98, bottom=0.2, top=0.94)
 
-    ax.plot(times[: k_max + 1], truth[: k_max + 1], color="sandybrown")
-    ax.plot(times[k_max:], truth[k_max:], color="black")
+    ax.plot(times, truth, color="black")
 
     palette = sns.color_palette("pastel", len(outputs))
     for (condition, window, out), colour in zip(outputs, palette):
-        ax.plot(times[condition:window], out, color=colour)
+        ax.plot(times[condition - 1 : window], out, color=colour)
 
     ax.set_xlabel("time (s)")
     ax.set_ylabel("angle")
